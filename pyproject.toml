@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lensing_fisher"
+version = "0.1.0"
+description = "Fisher matrices for CMB 2pt lensing sensitivity, plus a template-based Cobaya theory class."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Gabe Lynch", email = "gabriel.p.lynch@gmail.com" }]
+dependencies = [
+    "numpy",
+    "scipy",
+    "pyyaml",
+    "camb",
+    "jax",
+]
+
+[project.optional-dependencies]
+mpi = ["mpi4py"]
+cobaya = ["cobaya"]
+likelihoods = ["candl", "clipy"]
+dev = ["pytest"]
+
+[project.scripts]
+lensing-fisher = "lensing_fisher.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lensing_fisher = ["py.typed"]
