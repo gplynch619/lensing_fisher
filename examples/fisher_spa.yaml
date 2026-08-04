@@ -11,7 +11,8 @@
 # Once data/unlensed_bestfit_pp.pkl exists, switch bins.template to that file so
 # r == 1 and the Fisher is exactly the A_template Fisher.
 
-likelihoods: !include datasets/spa.yaml#likelihoods
+likelihoods:      !include datasets/spa.yaml#likelihoods
+tied_parameters:  !include datasets/spa.yaml#tied_parameters
 
 cosmology:
   fiducial:
@@ -67,10 +68,16 @@ bins:
   steepness: 2
 
   template:
-    # Before the UP chain lands, derive C_fid from the fiducial cosmology above.
-    from_fiducial_cosmology: true
-    # Afterwards, switch to the best-fit template so that r == 1:
-    # file: ${MNU_HUNTER_ROOT}/data/unlensed_bestfit_pp.pkl
+    # The existing unlensed best-fit template, from the pre-2026 UP chain. Good
+    # enough to iterate the binning against: choosing C_fid != C_tem is corrected
+    # exactly at analysis time by r_j = C_tem(L_j)/C_fid(L_j), so the converged
+    # bin grid does not depend on getting this right.
+    #
+    # Once the new UP-PAS chain lands, repoint this at ITS best-fit template and
+    # rerun once at the converged edges. Then r == 1 identically and the Fisher
+    # is exactly the A_template Fisher. L_eff should move by much less than its
+    # 68% width; if it does not, that is a result worth recording.
+    file: ${MNU_HUNTER_ROOT}/src/unlensed_bestfit_pp.pkl
 
   # Fractional step in q. A scalar is fine for iteration 0; from iteration 1
   # size it per bin off the previous Fisher, so narrow bins (which are more

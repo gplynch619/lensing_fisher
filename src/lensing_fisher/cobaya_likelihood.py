@@ -11,7 +11,7 @@ Usage in a Cobaya YAML::
 
     likelihood:
       lensing_fisher.cobaya_likelihood.CandlClipyCombined:
-        dataset_file: /path/to/unlensed_planck.yaml   # the `likelihoods:` block
+        dataset_file: /path/to/up_planck_act_spt.yaml  # the `likelihoods:` block
         python_path: /path/to/lensing_fisher/src
 
 Nuisance parameters are declared automatically from the likelihoods' own
@@ -67,8 +67,7 @@ class CandlClipyCombined(Likelihood):
                 "'likelihoods' mapping"
             )
 
-        self._names = list(cfg["likelihoods"].keys())
-        self._likes, self._nuisance_fid = build_likelihoods(cfg)
+        self._names, self._likes, self._nuisance_fid = build_likelihoods(cfg["likelihoods"])
         self._ell_min = min(int(lk.ell_min) for lk in self._likes)
         # Arrays handed to each likelihood must span its advertised ell_max ...
         self._ell_max = max(int(lk.ell_max) for lk in self._likes)
@@ -98,10 +97,16 @@ class CandlClipyCombined(Likelihood):
     def _handle_internal_priors(self):
         """Clear candl's internal priors, and report clipy's, to avoid double-counting.
 
-        candl priors are a plain list and can be dropped. clipy bakes its priors
-        into the likelihood (``all_priors=True`` in the dataset spec), so they
-        cannot be cleared here — they are reported instead, and those parameters
-        must not also carry a prior in the Cobaya ``params:`` block.
+        candl priors are a plain list and emptying it works — but only here, in
+        ``initialize()``. candl compiles the log-likelihood on its first call and
+        ignores later edits to the list, so this must stay ahead of any ``logp``.
+        clipy bakes its priors in at construction (``all_priors=True`` in the
+        dataset spec) and offers no equivalent, so they are reported instead, and
+        those parameters must not also carry a prior in the Cobaya ``params:``
+        block.
+
+        This is all-or-nothing. To keep the calibration priors while dropping a
+        specific one, use ``drop_priors:`` in the dataset file instead.
         """
         for name, like in zip(self._names, self._likes):
             if hasattr(like, "priors") and isinstance(getattr(like, "priors", None), list):
@@ -109,6 +114,7 @@ class CandlClipyCombined(Likelihood):
                     par_names = sorted({p for pr in like.priors for p in pr.par_names})
                     self.log.info("%s: clearing internal priors on %s", name, par_names)
                     like.priors = []
+                    like.init_priors()
                 continue
 
             internal = getattr(like, "_prior", None)

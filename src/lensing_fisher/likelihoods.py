@@ -54,12 +54,68 @@ def ell_cut_mask(like, ell_cuts: dict) -> list:
     return mask.tolist()
 
 
-def make_candl(*, dataset: str, ell_cuts=None, **kwargs):
+def drop_parameter_priors(like, names, label: str = "") -> None:
+    """Remove a candl likelihood's internal Gaussian priors on ``names``, in place.
+
+    candl datasets ship stand-in priors for parameters they cannot constrain
+    themselves. ACT DR6 carries ``tau = 0.0566 +/- 0.0058`` and SPT-3G D1
+    ``tau = 0.051 +/- 0.006``, both applied inside ``log_like``. They are meant
+    as an *alternative* to a low-ell EE likelihood — the ACT dataset file says as
+    much — so a combination that already includes sroll2 and keeps them counts
+    tau two or three times over. For SPA that turns sigma(tau) ~ 0.007 into
+    ~ 0.0035, and since tau is degenerate with A_s it propagates straight into
+    the lensing amplitude this package exists to measure.
+
+    Note this is *selective*, which is the reason it exists. candl's own
+    ``clear_internal_priors`` is all-or-nothing, and clearing everything would
+    also drop the calibration priors (``A_act``, ``Tcal``), which are genuine
+    nuisance constraints we want to keep.
+
+    **Call this before the likelihood's first evaluation.** candl caches the
+    compiled log-likelihood on first ``log_like`` call, so editing the prior list
+    after that is silently ignored — the list shrinks, the logl does not change,
+    and nothing warns. :func:`make_candl` does it at construction, which is the
+    only supported place; do not call it on a likelihood already in use.
+
+    Raises rather than no-ops on an unmatched name: a silently ineffective
+    ``drop_priors`` looks exactly like a correct one in the output.
+    """
+    wanted = set(names)
+    kept, removed = [], set()
+    for prior in like.priors:
+        matched = wanted.intersection(prior.par_names)
+        if not matched:
+            kept.append(prior)
+            continue
+        others = set(prior.par_names) - wanted
+        if others:
+            raise ValueError(
+                f"{label}: prior on {prior.par_names} is joint over {sorted(others)}, "
+                f"which drop_priors {sorted(wanted)} would silently remove too"
+            )
+        removed |= matched
+
+    if wanted - removed:
+        raise ValueError(
+            f"{label}: drop_priors names {sorted(wanted - removed)}, which carries "
+            f"no internal prior here (has: "
+            f"{sorted({p for pr in like.priors for p in pr.par_names})})"
+        )
+
+    like.priors = kept
+    like.init_priors()   # belt and braces; the ordering above is what matters
+    info(f"{label}: dropped internal prior(s) on {sorted(removed)}")
+
+
+def make_candl(*, dataset: str, ell_cuts=None, drop_priors=(), **kwargs):
     """``candl.Like`` from a dotted dataset path, optionally ell-cut.
 
     Note that candl's ``ell_min``/``ell_max`` are *not* reduced by the resulting
     ``data_selection``; a cut likelihood still requests theory over its original
     range. :mod:`lensing_fisher.windows` deals with the consequences.
+
+    ``drop_priors: [tau]`` removes internal priors that would double-count a
+    likelihood the dataset already includes; see :func:`drop_parameter_priors`.
     """
     import candl
 
@@ -74,7 +130,11 @@ def make_candl(*, dataset: str, ell_cuts=None, **kwargs):
         info(f"{dataset}: keeps {sum(mask)}/{len(mask)} bandpowers"
              + (f"; drops spectra {dropped}" if dropped else ""))
         kwargs["data_selection"] = mask
-    return candl.Like(data, **kwargs)
+
+    like = candl.Like(data, **kwargs)
+    if drop_priors:
+        drop_parameter_priors(like, drop_priors, label=dataset)
+    return like
 
 
 def make_clipy(*, clik_path: str, all_priors: bool = True, crop=None, **kwargs):
@@ -150,25 +210,33 @@ def build_likelihoods(spec_block: dict):
     return names, likelihoods, nuisance
 
 
-def combined_loglike(likelihoods, theory, tau_prior=None):
+def combined_loglike(likelihoods, theory, tau_prior=None, tied=None):
     """Sum of ``log_like`` over likelihoods, as a function of a parameter dict.
 
     ``theory`` is a ``pars_to_theory_specs(pars, ell_high, ell_low)`` callable —
     in practice a :class:`~lensing_fisher.local_lens.BinnedLensingTheory`.
     ``tau_prior`` is an optional ``{mean, sigma}`` Gaussian, needed only when the
     dataset carries no low-ell EE likelihood to constrain tau itself.
+
+    ``tied`` maps a parameter onto another that supplies its value, e.g.
+    ``{"A_planck": "A_act"}`` for a single shared calibration across Planck and
+    ACT. Tied parameters are filled in here and are *not* members of the Fisher
+    vector — see :func:`~lensing_fisher.driver.assemble_parameters`. This mirrors
+    Cobaya's ``A_planck: {value: 'lambda A_act: A_act'}``, so the chain and the
+    Fisher vary the same number of things.
     """
     import candl.tools
 
     like_funcs = [candl.tools.get_params_to_logl_func(lk, theory) for lk in likelihoods]
+    tied = dict(tied or {})
 
-    if tau_prior is None:
-        return lambda pars: sum(f(pars) for f in like_funcs)
-
-    mean, sigma = float(tau_prior["mean"]), float(tau_prior["sigma"])
-
-    def with_prior(pars):
+    def evaluate(pars):
+        if tied:
+            pars = {**pars, **{target: pars[source] for target, source in tied.items()}}
         total = sum(f(pars) for f in like_funcs)
-        return total - ((mean - pars["tau"]) / sigma) ** 2.0
+        if tau_prior is not None:
+            mean, sigma = float(tau_prior["mean"]), float(tau_prior["sigma"])
+            total -= ((mean - pars["tau"]) / sigma) ** 2.0
+        return total
 
-    return with_prior
+    return evaluate

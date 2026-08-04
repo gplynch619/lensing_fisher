@@ -169,16 +169,30 @@ def clpp_step_sizes(step_cfg, bin_edges: np.ndarray) -> np.ndarray:
     return steps
 
 
-def assemble_parameters(cosmo_cfg: dict, bins_cfg: dict,
-                        nuisance_fid: dict, bin_edges: np.ndarray) -> ParameterSet:
+def assemble_parameters(cosmo_cfg: dict, bins_cfg: dict, nuisance_fid: dict,
+                        bin_edges: np.ndarray, tied: dict | None = None) -> ParameterSet:
     """Collect cosmology + nuisance + bin amplitudes into one ordered vector.
 
     Order is cosmology, then nuisance, then ``clpp_1 .. clpp_n``; it sets the
     row/column order of the Fisher matrix and the block boundaries the analysis
     step relies on.
+
+    ``tied`` (e.g. ``{"A_planck": "A_act"}``) removes the tied parameter from the
+    vector: it is not free, so a row and column for it would be degenerate and
+    the matrix singular. Its value is supplied at evaluation time by
+    :func:`~lensing_fisher.likelihoods.combined_loglike`.
     """
+    tied = dict(tied or {})
+    unknown = {n for pair in tied.items() for n in pair} - set(nuisance_fid)
+    if unknown:
+        raise ValueError(
+            f"tied_parameters references {sorted(unknown)}, which no likelihood "
+            f"requires (available: {sorted(nuisance_fid)})"
+        )
+
     cosmo_names = list(cosmo_cfg["fiducial"])
-    nuisance_names = [n for n in nuisance_fid if n not in cosmo_names]
+    nuisance_names = [n for n in nuisance_fid
+                      if n not in cosmo_names and n not in tied]
     bin_names = [f"clpp_{i + 1}" for i in range(len(bin_edges) - 1)]
 
     fiducial = {name: float(cosmo_cfg["fiducial"][name]) for name in cosmo_names}
@@ -245,8 +259,11 @@ def run(cfg: dict, comm: Any = None) -> str:
         cache_size=int(bins_cfg.get("camb_cache_size", 4)),
     )
 
-    params = assemble_parameters(cosmo_cfg, bins_cfg, nuisance_fid, bin_edges)
-    loglike = combined_loglike(likelihoods, theory, cosmo_cfg.get("tau_prior"))
+    tied = cfg.get("tied_parameters") or {}
+    params = assemble_parameters(cosmo_cfg, bins_cfg, nuisance_fid, bin_edges, tied)
+    loglike = combined_loglike(likelihoods, theory, cosmo_cfg.get("tau_prior"), tied)
+    if tied:
+        info("tied: " + ", ".join(f"{t} = {s}" for t, s in tied.items()))
 
     widths = np.diff(bin_edges)
     info(f"{len(params.fiducial)} parameters: {len(params.cosmo_names)} cosmology, "
@@ -282,6 +299,7 @@ def _provenance(cfg, params: ParameterSet, bin_edges, clpp_fid, names) -> dict:
         "steepness": float(cfg["bins"].get("steepness", 2.0)),
         "cosmo_names": params.cosmo_names,
         "nuisance_names": params.nuisance_names,
+        "tied_parameters": cfg.get("tied_parameters") or {},
         "fiducial_cosmology": {k: params.fiducial[k] for k in params.cosmo_names},
         "fixed_cosmology": cfg["cosmology"].get("fixed", {}),
         "likelihood_names": names,

@@ -1,0 +1,89 @@
+# UP-PAS — the extended "unlensed" set: everything cut at ell <= 1000, where
+# peak smoothing carries little information, so this set defines the lensing
+# power *predicted* by the unlensed CMB rather than measured from it. Same idea
+# as UP-P (up_planck.yaml) but adding the ACT and SPT data that is still
+# lensing-free, which makes the prediction tighter.
+#
+#   Planck  TT    30-1000   (plik-lite, clipy crop)
+#   Planck  TE/EE 30-600    (plik-lite, clipy crop)
+#   ACT DR6 TT    600-1000  (overlaps Planck TT, see below)
+#   ACT DR6 TE/EE 600-1000  (picks up where Planck TE/EE stops)
+#   SPT-3G  TT    425-1000
+#   SPT-3G  TE/EE 600-1000
+#   Planck low-l TT (commander) and low-l EE (sroll2 simall)
+#
+# The 1000 ceiling everywhere is what makes the set "unlensed": it comes from
+# the sigma(A_lens) scan in notebooks/unlensed_estimation.ipynb. 600 is the
+# Planck TE/EE handoff, following P-ACT.
+#
+# TWO OVERLAPS ARE ACCEPTED HERE, both deliberately:
+#
+#   ACT TT 600-1000 sits on top of Planck TT over the same multipoles. This is
+#   the DR6 prescription — "we neglect correlations in TT in the 600 < l < 1000
+#   range where ACT and Planck overlap; the Planck uncertainties are smaller in
+#   this angular range."
+#
+#   SPT-3G overlaps both Planck and ACT throughout. SPT is a separate survey
+#   over a small deep field and its covariance with the others is neglected
+#   outright, as in the pre-2026 run.
+#
+# Note SPT TE/EE is taken from 600 rather than from its own start at 425, so the
+# polarisation handoff is at 600 for both added experiments. The 425-600 SPT
+# TE/EE bandpowers are therefore unused; nothing forbids including them under
+# the covariance argument above if the extra constraining power is wanted.
+#
+# This block is consumed both by the Fisher driver and, via
+# lensing_fisher.cobaya_likelihood.CandlClipyCombined, by the Cobaya
+# chain — so the two see identical data by construction.
+#
+# Set PLANCK_CLIK_BASELINE to the directory holding the Planck 2018 plc_3.0
+# baseline.
+
+# One shared calibration across Planck and ACT — see the note in spa.yaml.
+# UP-P (up_planck.yaml) has no ACT, so it has no tie and A_planck is free there.
+tied_parameters:
+  A_planck: A_act
+
+likelihoods:
+  planck_lowl_tt:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/commander/commander_dx12_v3_2_29.clik
+    all_priors: true
+
+  planck_lowl_ee:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/simall/simall_100x143_sroll2_v3_EE_Aplanck.clik
+    all_priors: true
+
+  planck_highl_ttteee:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
+    all_priors: true
+    crop:
+      - "crop TT 0 1000 strict"
+      - "crop TE 0 600 strict"
+      - "crop EE 0 600 strict"
+
+  act_dr6:
+    backend: candl
+    dataset: candl_data.ACT_DR6_TTTEEE
+    # ACT bandpowers start at 600 in all three spectra, so 600 is the natural
+    # lower bound; the 1000 ceiling is the unlensed cut.
+    ell_cuts:
+      TT: [600, 1000]
+      TE: [600, 1000]
+      EE: [600, 1000]
+    # ACT carries an internal tau = 0.0566 +/- 0.0058 prior as a substitute for a
+    # low-ell EE likelihood. This set has sroll2, so keeping it counts tau twice.
+    drop_priors: [tau]
+
+  spt3g_D1:
+    backend: candl
+    dataset: spt_candl_data.SPT3G_D1_TnE_lite
+    # TT from SPT's own start (425); TE/EE from the 600 polarisation handoff.
+    ell_cuts:
+      TT: [0, 1000]
+      TE: [600, 1000]
+      EE: [600, 1000]
+    # Likewise: SPT-3G carries tau = 0.051 +/- 0.006 internally.
+    drop_priors: [tau]

@@ -89,7 +89,7 @@ not 8.
 ```yaml
 likelihood:
   lensing_fisher.cobaya_likelihood.CandlClipyCombined:
-    dataset_file: /path/to/examples/datasets/unlensed_planck.yaml
+    dataset_file: /path/to/examples/datasets/up_planck_act_spt.yaml
     clear_internal_priors: false     # keep candl's priors, as the Fisher does
 
 theory:
@@ -98,8 +98,28 @@ theory:
 ```
 
 Add `A_template` to `params:` for the template chain; omit both the theory
-override and `A_template` for the plain unlensed chain (see
-`examples/chain_unlensed_planck.yaml`).
+override and `A_template` for the plain unlensed chain.
+
+### The three datasets
+
+| File | What it is |
+|---|---|
+| `datasets/up_planck.yaml` | **UP-P** — Planck alone, TT<=1000, TE/EE<=600, plus low-l |
+| `datasets/up_planck_act_spt.yaml` | **UP-PAS** — UP-P plus the lensing-free ACT TE/EE 600-1000 and SPT<=1000 |
+| `datasets/spa.yaml` | **SPA** — the same experiments at full range; the *lensed* set |
+
+Each dataset file also carries `tied_parameters` (`A_planck: A_act`, one shared
+Planck/ACT calibration) and any `drop_priors` needed to stop a likelihood's
+internal stand-in prior from double-counting one the set already includes — ACT
+and SPT-3G both ship a `tau` prior meant as a substitute for low-ell EE.
+
+The two unlensed sets are built on one stack and share their Planck block
+verbatim, so the difference between their best-fit `C_L^pp` templates is
+attributable to the added ACT and SPT data rather than to a change of likelihood
+implementation. `tests/test_config.py` asserts that they differ by exactly the
+two added entries. `examples/chain_up_planck.yaml` and
+`examples/chain_up_planck_act_spt.yaml` are the corresponding chains; UP-PAS
+produces the production template.
 
 ## Traps this package guards against
 

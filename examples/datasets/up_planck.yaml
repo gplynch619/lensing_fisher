@@ -1,0 +1,42 @@
+# UP-P — the original "unlensed Planck" set: Planck alone, cut where ACT would
+# take over in P-ACT.
+#
+#   Planck  TT    30-1000   (plik-lite, clipy crop)
+#   Planck  TE/EE 30-600    (plik-lite, clipy crop)
+#   Planck  low-l TT (commander) and low-l EE (sroll2 simall)
+#
+# This is the dataset behind the pre-2026 result, rebuilt on the clipy/candl
+# stack rather than the Cobaya-native likelihoods it originally used
+# (planck_2018_lowl.TT/EE + act_dr6_cmbonly.PlanckActCut with
+# lmax_cuts "1000 600 600"; see data/unlensed_planck/unlensed_planck.input.yaml).
+#
+# The rebuild is deliberate. UP-P and UP-PAS (up_planck_act_spt.yaml) then differ
+# by *nothing but the added ACT and SPT data*, so any shift in the predicted
+# lensing power is attributable to that data rather than to a change of
+# likelihood implementation. It does mean this is not a bit-level reproduction
+# of the old chain: low-l EE is sroll2 here where the old run used the 2018
+# simall, and high-l Planck is plik-lite where the old run used PlanckActCut.
+# Expect small shifts in tau and hence in the amplitude of the predicted C_L^pp.
+#
+# Set PLANCK_CLIK_BASELINE to the directory holding the Planck 2018 plc_3.0
+# baseline.
+
+likelihoods:
+  planck_lowl_tt:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/commander/commander_dx12_v3_2_29.clik
+    all_priors: true
+
+  planck_lowl_ee:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/simall/simall_100x143_sroll2_v3_EE_Aplanck.clik
+    all_priors: true
+
+  planck_highl_ttteee:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
+    all_priors: true
+    crop:
+      - "crop TT 0 1000 strict"
+      - "crop TE 0 600 strict"
+      - "crop EE 0 600 strict"

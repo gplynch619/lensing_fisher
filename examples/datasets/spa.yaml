@@ -1,14 +1,44 @@
 # SPA — the *lensed* data combination in which A_template is measured, and so
 # the set whose sensitivity kernel the Fisher analysis characterises.
 #
-# Same experiments and same ell split as unlensed_planck.yaml, but at full
-# range: Planck TT<=1000 and TE/EE<=600 with ACT and SPT-3G taking over above.
+# Same experiments and the same P-ACT ell split as up_planck_act_spt.yaml; what
+# differs is that nothing is capped at ell=1000, so ACT and SPT-3G run out to
+# their full reach and the peak smoothing is retained. Planck is still cut where
+# ACT takes over:
+#
+#   Planck  TT    30-1000    (plik-lite, clipy crop)
+#   Planck  TE/EE 30-600     (plik-lite, clipy crop)
+#   ACT DR6 TT     600-6126  (overlaps Planck TT over 600-1000, by design)
+#   ACT DR6 TE/EE  600-6126  (picks up exactly where Planck TE/EE stops)
+#   SPT-3G  TT/TE/EE 425-3975 (uncut; independent survey, see below)
+#   Planck low-l TT (commander) and low-l EE (sroll2 simall)
+#
 # Built from the same clipy/candl stack as UP, which removes the SPA1/SPA2
 # inconsistency recorded in results/notes/update.tex (chain used Cobaya-native
 # Planck likelihoods, Fisher used clipy).
 #
 # Data reach: ACT DR6 bandpowers extend to ell ~ 6126, SPT-3G D1 to ell ~ 3975.
 # The CAMB lmax must cover that — see the note in fisher_spa.yaml.
+#
+# ON SPT OVERLAP: SPT-3G is deliberately left uncut even though it spans the same
+# multipoles as Planck and ACT. It is a separate survey over a small deep field,
+# and the standard treatment neglects its covariance with the others. This
+# matches the pre-2026 run (src/lensing_sensitivity_fisher.py used an uncut
+# candl.Like for SPT-3G D1). Only the Planck/ACT overlap needs the explicit cut,
+# because those two share most of the sky.
+
+# One shared calibration across Planck and ACT, as in the project's Cobaya
+# P-ACT configs (`A_planck: {value: 'lambda A_act: A_act'}`). A_planck is not a
+# free parameter: it takes A_act's value. The Fisher honours this via
+# combined_loglike; the chain declares the same tie Cobaya-style, and
+# tests/test_tied_parameters.py asserts the two agree.
+#
+# Note both calibration priors then act on the same number — clipy's internal
+# A_planck prior (all_priors: true) and candl's A_act prior. That is inherent to
+# tying them and matches the Cobaya setup; set all_priors: false on plik-lite if
+# you want only ACT's.
+tied_parameters:
+  A_planck: A_act
 
 likelihoods:
   planck_lowl_tt:
@@ -18,7 +48,7 @@ likelihoods:
 
   planck_lowl_ee:
     backend: clipy
-    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/sroll2/simall_100x143_sroll2_v3_EE_Aplanck.clik
+    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/simall/simall_100x143_sroll2_v3_EE_Aplanck.clik
     all_priors: true
 
   planck_highl_ttteee:
@@ -33,11 +63,29 @@ likelihoods:
   act_dr6:
     backend: candl
     dataset: candl_data.ACT_DR6_TTTEEE
+    # ACT DR6 ships bandpowers from ell=600 in all of TT/TE/EE and applies no
+    # default data selection, so these bounds have to be set explicitly.
+    #
+    # TT deliberately overlaps Planck over 600 < ell < 1000. That is the DR6
+    # prescription, not an oversight — from the ACT DR6 paper: "We neglect
+    # correlations in TT in the 600 < l < 1000 range where ACT and Planck
+    # overlap; the Planck uncertainties are smaller in this angular range."
+    # TE/EE do not overlap at all, since Planck stops at 600 there.
+    #
+    # 8500 is ACT's advertised ell_max and is not binding: the last bandpower
+    # sits at ell = 6125.5 and the windows carry zero weight above 6500. That is
+    # why fisher_spa.yaml sets the CAMB lmax to 6500 and not 8500.
     ell_cuts:
-      TT: [1000, 10000]
-      TE: [600, 10000]
-      EE: [600, 10000]
+      TT: [600, 8500]
+      TE: [600, 8500]
+      EE: [600, 8500]
+    # ACT carries an internal tau = 0.0566 +/- 0.0058 prior, intended as a
+    # substitute for a low-ell EE likelihood. This set has sroll2, so keeping it
+    # would count tau twice.
+    drop_priors: [tau]
 
   spt3g_D1:
     backend: candl
     dataset: spt_candl_data.SPT3G_D1_TnE_lite
+    # Likewise: SPT-3G carries tau = 0.051 +/- 0.006 internally.
+    drop_priors: [tau]

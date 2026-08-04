@@ -1,12 +1,15 @@
-# Job A — the "unlensed" chain. Standard LCDM with self-consistent CAMB lensing
-# and no A_template. Its best fit defines C_tem, the lensing power predicted by
-# the unlensed CMB, which everything downstream is measured against.
+# Job A1 — the UP-P "unlensed" chain: Planck alone, cut where ACT would take
+# over. Standard LCDM with self-consistent CAMB lensing and no A_template.
 #
-#   cobaya-run examples/chain_unlensed_planck.yaml
+#   cobaya-run examples/chain_up_planck.yaml
 #
-# Then minimize, and write the best-fit C^phiphi to a {L, CL_pp_fid} pickle;
-# that file becomes both bins.template for the Fisher and clpp_template_file for
-# the A_template chain.
+# This is the comparison point for Job A2 (chain_up_planck_act_spt.yaml). Both
+# are built on the same clipy/candl stack, so the difference between the two
+# best-fit C_L^pp templates isolates what the added ACT and SPT data does to the
+# unlensed prediction. A2's template is the production one.
+#
+# Everything here sits below ell = 1000, so CAMB at lmax ~1200 suffices and the
+# chain is cheap.
 #
 # NOTE ON TAU: this set includes the sroll2 low-l EE likelihood, so tau is
 # measured, not prior-driven. Use CAMB rather than the cmb_alens_spt_*
@@ -29,10 +32,9 @@ theory:
 
 likelihood:
   lensing_fisher.cobaya_likelihood.CandlClipyCombined:
-    dataset_file: ${LENSING_FISHER_ROOT}/examples/datasets/unlensed_planck.yaml
-    # Keep candl's internal Gaussian priors so the chain and the Fisher use
-    # identical priors (the Fisher driver keeps them too). The params below
-    # therefore declare these nuisances with wide FLAT priors only.
+    dataset_file: ${LENSING_FISHER_ROOT}/examples/datasets/up_planck.yaml
+    # Keep the likelihoods' internal Gaussian priors so the chain and the Fisher
+    # use identical priors. A_planck below therefore carries a wide FLAT prior.
     clear_internal_priors: false
 
 params:
@@ -71,32 +73,13 @@ params:
     proposal: 0.0073
     latex: \tau_\mathrm{reio}
 
-  # Nuisance. Flat and wide: the Gaussian constraints come from the likelihoods.
+  # Nuisance. Planck-only, so A_planck is the whole nuisance sector: no ACT or
+  # SPT calibrations here, unlike chain_up_planck_act_spt.yaml.
   A_planck:
     prior: {min: 0.9, max: 1.1}
     ref: 1.0
     proposal: 0.003
     latex: A_{\rm Planck}
-  Ecal:
-    prior: {min: 0.8, max: 1.2}
-    ref: 1.0
-    proposal: 0.005
-    latex: E_{\rm cal}
-  Tcal:
-    prior: {min: 0.9, max: 1.1}
-    ref: 1.0
-    proposal: 5.0e-05
-    latex: T_{\rm cal}
-  A_act:
-    prior: {min: 0.9, max: 1.1}
-    ref: 1.0
-    proposal: 0.003
-    latex: A_{\rm ACT}
-  P_act:
-    prior: {min: 0.9, max: 1.1}
-    ref: 1.0
-    proposal: 0.01
-    latex: p_{\rm ACT}
 
   H0: {latex: H_0, derived: true}
   sigma8: {latex: \sigma_8, derived: true}
@@ -110,4 +93,4 @@ sampler:
     Rminus1_stop: 0.02
     Rminus1_cl_stop: 0.2
 
-output: ${MNU_HUNTER_ROOT}/data/unlensed_planck_v2/unlensed_planck
+output: ${MNU_HUNTER_ROOT}/data/up_planck/up_planck
