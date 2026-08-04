@@ -1,0 +1,43 @@
+# SPA — the *lensed* data combination in which A_template is measured, and so
+# the set whose sensitivity kernel the Fisher analysis characterises.
+#
+# Same experiments and same ell split as unlensed_planck.yaml, but at full
+# range: Planck TT<=1000 and TE/EE<=600 with ACT and SPT-3G taking over above.
+# Built from the same clipy/candl stack as UP, which removes the SPA1/SPA2
+# inconsistency recorded in results/notes/update.tex (chain used Cobaya-native
+# Planck likelihoods, Fisher used clipy).
+#
+# Data reach: ACT DR6 bandpowers extend to ell ~ 6126, SPT-3G D1 to ell ~ 3975.
+# The CAMB lmax must cover that — see the note in fisher_spa.yaml.
+
+likelihoods:
+  planck_lowl_tt:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/commander/commander_dx12_v3_2_29.clik
+    all_priors: true
+
+  planck_lowl_ee:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/low_l/sroll2/simall_100x143_sroll2_v3_EE_Aplanck.clik
+    all_priors: true
+
+  planck_highl_ttteee:
+    backend: clipy
+    clik_path: ${PLANCK_CLIK_BASELINE}/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik
+    all_priors: true
+    crop:
+      - "crop TT 0 1000 strict"
+      - "crop TE 0 600 strict"
+      - "crop EE 0 600 strict"
+
+  act_dr6:
+    backend: candl
+    dataset: candl_data.ACT_DR6_TTTEEE
+    ell_cuts:
+      TT: [1000, 10000]
+      TE: [600, 10000]
+      EE: [600, 10000]
+
+  spt3g_D1:
+    backend: candl
+    dataset: spt_candl_data.SPT3G_D1_TnE_lite

@@ -1,4 +1,4 @@
-"""YAML config loader with environment-variable expansion."""
+"""YAML config loader with environment-variable expansion and ``!include``."""
 
 import os
 import re
@@ -25,7 +25,62 @@ def _expand_env(obj):
     return obj
 
 
+class _IncludeLoader(yaml.SafeLoader):
+    """SafeLoader supporting ``!include <path>`` and ``!include <path>#<key>``.
+
+    Paths are resolved relative to the including file. The ``#key`` form splices
+    in a single top-level key, which is how a Fisher config pulls in a shared
+    dataset definition::
+
+        likelihoods: !include datasets/spa.yaml#likelihoods
+
+    The same file is then loadable by the Cobaya wrapper, so the chain and the
+    Fisher cannot drift apart.
+    """
+
+    def __init__(self, stream):
+        self._root = Path(getattr(stream, "name", ".")).parent
+        super().__init__(stream)
+
+
+def _include(loader: _IncludeLoader, node: yaml.Node):
+    spec = str(loader.construct_scalar(node))
+    path_part, _, key = spec.partition("#")
+
+    path = Path(path_part)
+    if not path.is_absolute():
+        path = loader._root / path
+    if not path.exists():
+        raise FileNotFoundError(f"!include target not found: {path}")
+
+    with open(path) as f:
+        data = yaml.load(f, _IncludeLoader)
+
+    if key:
+        if not isinstance(data, dict) or key not in data:
+            raise KeyError(f"!include {path_part}: no top-level key {key!r}")
+        return data[key]
+    return data
+
+
+_IncludeLoader.add_constructor("!include", _include)
+
+
 REQUIRED_TOP_LEVEL = ("likelihoods", "cosmology", "camb", "bins", "output")
+
+
+def load_raw(path: str | os.PathLike) -> dict:
+    """Load a YAML config with ``!include`` and ``${VAR}`` expansion, no validation.
+
+    Used when only part of a config is wanted — e.g. the Cobaya wrapper reading
+    the ``likelihoods:`` block out of a Fisher config, or a dataset-only file
+    shared between the two.
+    """
+    with open(path) as f:
+        cfg = yaml.load(f, _IncludeLoader)
+    if not isinstance(cfg, dict):
+        raise ValueError(f"config {path!s} did not parse to a mapping")
+    return _expand_env(cfg)
 
 
 def load(path: str | os.PathLike) -> dict:
@@ -34,11 +89,7 @@ def load(path: str | os.PathLike) -> dict:
     Returns a plain dict with environment variables expanded. Raises if any
     top-level required section is missing.
     """
-    text = Path(path).read_text()
-    cfg = yaml.safe_load(text)
-    if not isinstance(cfg, dict):
-        raise ValueError(f"config {path!s} did not parse to a mapping")
-    cfg = _expand_env(cfg)
+    cfg = load_raw(path)
 
     missing = [k for k in REQUIRED_TOP_LEVEL if k not in cfg]
     if missing:

@@ -1,0 +1,87 @@
+# Fisher sensitivity kernel for the SPA (lensed) data combination.
+#
+# Run:  mpirun -n <N> lensing-fisher -i examples/fisher_spa.yaml
+#
+# Iteration protocol for the bin grid:
+#   0. Run as written (log-spaced starting grid, C_fid from the fiducial cosmology).
+#   1. python -m lensing_fisher.rebin <out.pkl> -o edges_1.yaml
+#   2. Paste the new edges below, point bins.step_size.from_fisher at <out.pkl>,
+#      bump the output filename, resubmit.
+#   3. Stop when analysis.edges_converged and L_eff has stabilised.
+# Once data/unlensed_bestfit_pp.pkl exists, switch bins.template to that file so
+# r == 1 and the Fisher is exactly the A_template Fisher.
+
+likelihoods: !include datasets/spa.yaml#likelihoods
+
+cosmology:
+  fiducial:
+    H0: 67.37
+    ombh2: 0.02233
+    omch2: 0.1198
+    logA: 3.043
+    ns: 0.9652
+    tau: 0.054
+  fixed:
+    mnu: 0.06
+    omk: 0
+  step_sizes_relative:
+    H0: 0.01
+    ombh2: 0.01
+    omch2: 0.01
+    logA: 0.01
+    ns: 0.01
+    tau: 0.01
+  nuisance_step_relative: 0.01
+  # No tau prior here: this dataset includes the sroll2 low-l EE likelihood,
+  # which constrains tau directly. Adding both would double-count.
+
+camb:
+  set_for_lmax:
+    # Must cover the data. ACT DR6 bandpowers reach ell ~ 6126; the old
+    # reference run used lmax 2500 and fed those bins zero theory. The
+    # check_theory_lmax guard will refuse to start if this is too low.
+    lmax: 6500
+    lens_potential_accuracy: 8
+    lens_margin: 2050
+  matter_power:
+    kmax: 10
+    k_per_logint: 130
+    nonlinear: true
+  accuracy:
+    AccuracyBoost: 1.0
+    lSampleBoost: 1.0
+    lAccuracyBoost: 1.2
+    DoLateRadTruncation: false
+    min_l_logl_sampling: 6000
+  # Fraction of bandpower window weight allowed above the lensed-CMB lmax.
+  window_support_tol: 1.0e-3
+
+bins:
+  edges:
+    start: 2
+    stop: 2000
+    n: 50
+    spacing: log
+  # A catch-all bin from 2000 to CAMB's max_l is appended automatically so that
+  # a uniform q is exactly A_template. Set extend_to_lmax: false to disable.
+  steepness: 2
+
+  template:
+    # Before the UP chain lands, derive C_fid from the fiducial cosmology above.
+    from_fiducial_cosmology: true
+    # Afterwards, switch to the best-fit template so that r == 1:
+    # file: ${MNU_HUNTER_ROOT}/data/unlensed_bestfit_pp.pkl
+
+  # Fractional step in q. A scalar is fine for iteration 0; from iteration 1
+  # size it per bin off the previous Fisher, so narrow bins (which are more
+  # weakly constrained) get proportionally larger steps.
+  step_size: 0.05
+  # step_size:
+  #   from_fisher: ${MNU_HUNTER_ROOT}/data/full_fishers/spa_iter0.pkl
+  #   target_sigma_frac: 0.3
+  #   min: 0.02
+  #   max: 0.5
+
+output:
+  directory: ${MNU_HUNTER_ROOT}/data/full_fishers
+  filename: spa_iter0.pkl

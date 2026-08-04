@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lensing_fisher"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fisher matrices for CMB 2pt lensing sensitivity, plus a template-based Cobaya theory class."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,7 @@ dev = ["pytest"]
 
 [project.scripts]
 lensing-fisher = "lensing_fisher.cli:main"
+lensing-fisher-rebin = "lensing_fisher.cli:rebin"
 
 [tool.setuptools.packages.find]
 where = ["src"]

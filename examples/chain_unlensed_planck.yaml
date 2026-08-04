@@ -1,0 +1,113 @@
+# Job A — the "unlensed" chain. Standard LCDM with self-consistent CAMB lensing
+# and no A_template. Its best fit defines C_tem, the lensing power predicted by
+# the unlensed CMB, which everything downstream is measured against.
+#
+#   cobaya-run examples/chain_unlensed_planck.yaml
+#
+# Then minimize, and write the best-fit C^phiphi to a {L, CL_pp_fid} pickle;
+# that file becomes both bins.template for the Fisher and clpp_template_file for
+# the A_template chain.
+#
+# NOTE ON TAU: this set includes the sroll2 low-l EE likelihood, so tau is
+# measured, not prior-driven. Use CAMB rather than the cmb_alens_spt_*
+# emulators anywhere near this likelihood — their tau training range is
+# [0.012, 0.096] and extrapolating returns NaN from simall, which drops low-l EE
+# out of the gradient and walks a minimiser to spurious optima.
+
+theory:
+  camb:
+    extra_args:
+      lens_potential_accuracy: 4
+      lens_margin: 1250
+      lmax: 3000
+      mnu: 0.06
+      nnu: 3.044
+      num_massive_neutrinos: 1
+      halofit_version: mead2020
+      bbn_predictor: PArthENoPE_880.2_standard.dat
+      theta_H0_range: [40, 100]
+
+likelihood:
+  lensing_fisher.cobaya_likelihood.CandlClipyCombined:
+    dataset_file: ${LENSING_FISHER_ROOT}/examples/datasets/unlensed_planck.yaml
+    # Keep candl's internal Gaussian priors so the chain and the Fisher use
+    # identical priors (the Fisher driver keeps them too). The params below
+    # therefore declare these nuisances with wide FLAT priors only.
+    clear_internal_priors: false
+
+params:
+  ombh2:
+    prior: {min: 0.017, max: 0.027}
+    ref: {dist: norm, loc: 0.02239, scale: 0.0021}
+    proposal: 6.5e-05
+    latex: \Omega_\mathrm{b}h^2
+  omch2:
+    prior: {min: 0.09, max: 0.15}
+    ref: {dist: norm, loc: 0.12, scale: 0.026}
+    proposal: 0.0011
+    latex: \Omega_\mathrm{c}h^2
+  cosmomc_theta:
+    prior: {min: 0.0103, max: 0.0105}
+    ref: {dist: norm, loc: 0.010417, scale: 6.7e-05}
+    proposal: 1.0e-05
+    latex: \theta_\mathrm{MC}
+  logA:
+    prior: {min: 2.6, max: 3.5}
+    ref: {dist: norm, loc: 3.045, scale: 0.24}
+    proposal: 0.0036
+    latex: \log(10^{10} A_\mathrm{s})
+  As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+    derived: true
+  ns:
+    prior: {min: 0.9, max: 1.1}
+    ref: {dist: norm, loc: 0.9649, scale: 0.061}
+    proposal: 0.0033
+    latex: n_\mathrm{s}
+  tau:
+    prior: {min: 0.01, max: 0.15}
+    ref: {dist: norm, loc: 0.0544, scale: 0.0073}
+    proposal: 0.0073
+    latex: \tau_\mathrm{reio}
+
+  # Nuisance. Flat and wide: the Gaussian constraints come from the likelihoods.
+  A_planck:
+    prior: {min: 0.9, max: 1.1}
+    ref: 1.0
+    proposal: 0.003
+    latex: A_{\rm Planck}
+  Ecal:
+    prior: {min: 0.8, max: 1.2}
+    ref: 1.0
+    proposal: 0.005
+    latex: E_{\rm cal}
+  Tcal:
+    prior: {min: 0.9, max: 1.1}
+    ref: 1.0
+    proposal: 5.0e-05
+    latex: T_{\rm cal}
+  A_act:
+    prior: {min: 0.9, max: 1.1}
+    ref: 1.0
+    proposal: 0.003
+    latex: A_{\rm ACT}
+  P_act:
+    prior: {min: 0.9, max: 1.1}
+    ref: 1.0
+    proposal: 0.01
+    latex: p_{\rm ACT}
+
+  H0: {latex: H_0, derived: true}
+  sigma8: {latex: \sigma_8, derived: true}
+  thetastar: {latex: \theta_\star, derived: true}
+
+sampler:
+  mcmc:
+    drag: true
+    oversample_power: 0.4
+    proposal_scale: 1.9
+    Rminus1_stop: 0.02
+    Rminus1_cl_stop: 0.2
+
+output: ${MNU_HUNTER_ROOT}/data/unlensed_planck_v2/unlensed_planck
