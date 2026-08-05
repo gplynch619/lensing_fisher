@@ -27,7 +27,18 @@ error bars that can be plotted against reconstruction bandpowers.
 
 Two entry points matter for the science. `driver.run(cfg, comm)` turns a config
 into a saved Fisher matrix; `analysis.summarize(pickle)` turns that matrix into
-`L_eff` and its 68% band. Everything else supports one of those two.
+the effective `L` and its 68% band. Everything else supports one of those two.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/iteration.md](docs/iteration.md) | What the binning loop is doing, what converges, when to stop |
+| [docs/outputs.md](docs/outputs.md) | What is in the output pickle and the four ways to read it |
+| [cluster/RUNBOOK.md](cluster/RUNBOOK.md) | Running the whole analysis on hive — jobs, pre-flight checks, and everything that has gone wrong once |
+
+Start with `docs/outputs.md` if you have a pickle and want numbers out of it;
+with `docs/iteration.md` if you want to know why there is more than one.
 
 ## Install
 
@@ -71,18 +82,33 @@ cannot drift apart.
 ### Binning iteration
 
 ```bash
-lensing-fisher-rebin data/full_fishers/spa_iter0.pkl -n 50 --min-width 3 -o edges_1.yaml
+lensing-fisher-rebin data/full_fishers/spa_iter0.pkl \
+    -n 50 --min-width 3 --l-max 2000 -o edges_1.yaml
 ```
 
-Prints `L_eff` and its 68% band, proposes an equal-information grid, and says
-whether the edges have settled. Paste the fragment into the next config, point
-`bins.step_size.from_fisher` at the previous pickle so each bin's step tracks its
-own `sigma(q_j)`, and resubmit.
+Prints the median, mean and 68% band, proposes an equal-information grid, and
+says whether the edges have settled. Paste the fragment into the next config's
+`bins.edges`, bump `output.filename`, and resubmit. Full walkthrough in
+[docs/iteration.md](docs/iteration.md).
+
+**`--l-max` is required in practice.** It bounds the placement to the informative
+range so the catch-all bin — whose width is set by the theory lmax, not the data
+— stays fixed between passes and is re-appended at run time. Without it the
+placement spans the catch-all too, and since ~98% of the weight sits below
+L~1000 it will collapse the resolved range and make its own boundary the largest
+"edge movement" in the report.
+
+**Leave `bins.step_size` a scalar.** The per-bin `from_fisher` form needs
+`sigma(q_j)`, hence `inv(F_lens)`, which does not exist — the block is
+rank-deficient by construction, and `driver.clpp_step_sizes` now raises rather
+than propagating NaNs. It is also unnecessary: the `clpp` diagonals are stable to
+better than 0.1% across `h = 0.01 .. 5.0`.
 
 Watch the min-width warning. If most bins sit at the floor, the equal-information
 target is not being met and `--min-width` is too large for the bin count — with a
 kernel shaped like the published one, 50 bins over L=2..2000 wants a floor near 3,
-not 8.
+not 8. Below ~3 the bin basis functions stop reaching 1 and start duplicating
+their neighbours.
 
 ## Running a chain
 
@@ -141,7 +167,23 @@ produces the production template.
   for a uniform grid) would drag `L_eff` toward the wide high-L bins.
 - **MPI work is bucketed by cosmology, not round-robin**, so the CAMB results
   cache actually hits. Roughly 85% of matrix elements perturb no cosmological
-  parameter at all.
+  parameter at all. The deal counter runs *across* buckets: with a per-bucket
+  counter the single-element cosmology-pair buckets all landed on rank 0, which
+  then carried 85 CAMB solves against ~25 elsewhere.
+- **`set_cosmology` re-derives `YHe` on every call**, so the config's
+  `bbn_predictor` has to be re-supplied each time. It was not, and the first
+  cache miss silently reverted PArthENoPE to CAMB's PRIMAT default for the whole
+  run — a 0.19% shift in `YHe`, landing in the damping tail where ACT and SPT
+  carry their weight, and self-consistent enough that nothing looked wrong.
+  `BinnedLensingTheory` now takes `cosmology_kwargs`.
+- **A NaN log-likelihood becomes a *perfect* one.** Cobaya evaluates the
+  posterior with `make_finite=True`, i.e. `np.nan_to_num`, which maps NaN to
+  **0.0** — better than any real point in the space. `CandlClipyCombined.logp`
+  returns `-inf` if any component is non-finite. Without it, a minimizer walks
+  straight into the NaN region and a chain that proposes one can never leave.
+- **The marginalized `clpp` block is rank-deficient by construction**, so
+  `inv(F_lens)` is NaN and per-bin `sigma(q_j)` does not exist. That is physics,
+  not numerics — see [docs/outputs.md](docs/outputs.md#do-not-invert-f_lens).
 
 ## Tests
 
