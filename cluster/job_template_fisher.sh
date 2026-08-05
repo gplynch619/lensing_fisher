@@ -34,7 +34,7 @@
 # WALLTIME is a guess carried over from a much smaller job (27 bins at lmax
 # 2500). Benchmark before trusting it — see cluster/RUNBOOK.md.
 
-source /home/gplynch/projects/lensing_fisher/cluster/env.sh
+source /home/gplynch/projects/mnu_hunter/lensing_fisher/cluster/env.sh
 
 cd $LENSING_FISHER_ROOT
 

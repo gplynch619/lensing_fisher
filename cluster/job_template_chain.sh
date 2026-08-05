@@ -26,7 +26,7 @@
 # the same file continues rather than restarts; delete the output prefix to start
 # clean.
 
-source /home/gplynch/projects/lensing_fisher/cluster/env.sh
+source /home/gplynch/projects/mnu_hunter/lensing_fisher/cluster/env.sh
 
 cd $LENSING_FISHER_ROOT
 

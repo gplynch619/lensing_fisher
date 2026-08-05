@@ -4,6 +4,34 @@ For whoever (human or agent) is driving this on `hive`. It covers the parts that
 need judgment. The mechanical parts — environment, paths, submission — are in
 `cluster/env.sh` and the job templates next to this file.
 
+## Install
+
+Clone *inside* the existing `mnu_hunter`, matching the local layout:
+
+```bash
+cd /home/gplynch/projects/mnu_hunter
+git clone git@github.com:gplynch619/lensing_fisher.git
+cd lensing_fisher
+source cluster/env.sh
+pip install -e . --no-deps      # candl/clipy/cobaya/camb come from the env
+mkdir -p logs $MNU_HUNTER_ROOT/data/full_fishers
+```
+
+The split of responsibilities:
+
+| | |
+|---|---|
+| `mnu_hunter/lensing_fisher/` | the code — its own git repo, no data |
+| `mnu_hunter/src/unlensed_bestfit_pp.pkl` | the `C_fid` template the Fisher reads |
+| `mnu_hunter/data/` | every output: Fisher pickles and chains |
+
+Outputs deliberately land outside the repo, where the previous runs already live,
+so multi-GB chains never enter git. `--no-deps` is deliberate too: the cosmology
+stack is installed in the `pbh` env and pip must not try to replace it.
+
+If `mnu_hunter` is itself version-controlled on hive (it is not locally), add
+`lensing_fisher/` to its `.gitignore` so the nested repo is not swept into it.
+
 ## Submitting
 
 Same pattern as the rest of the project: a template plus an input file.
