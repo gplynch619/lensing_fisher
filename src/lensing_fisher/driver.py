@@ -31,7 +31,17 @@ from .local_lens import COSMO_KEYS, BinnedLensingTheory
 # ----------------------------------------------------------------------
 
 def build_camb_params(camb_cfg: dict, cosmology: dict):
-    """A ``CAMBparams`` at the fiducial cosmology with the configured accuracy."""
+    """A ``CAMBparams`` at the fiducial cosmology with the configured accuracy.
+
+    ``camb.set_cosmology`` in the config carries anything else ``set_cosmology``
+    takes — ``bbn_predictor``, ``nnu``, ``num_massive_neutrinos``. These must be
+    stated rather than left to CAMB's defaults, because the Cobaya chains state
+    them: CAMB 1.6.4 defaults to the PRIMAT BBN table while the chains ask for
+    PArthENoPE, which is a different Y_He at fixed ombh2 and so a different
+    damping tail — exactly where ACT and SPT carry their weight. A Fisher matrix
+    describing a different model from the chain is the failure this package is
+    built to avoid.
+    """
     import camb
 
     pars = camb.CAMBparams()
@@ -42,6 +52,7 @@ def build_camb_params(camb_cfg: dict, cosmology: dict):
         tau=cosmology["tau"],
         mnu=cosmology.get("mnu", 0.06),
         omk=cosmology.get("omk", 0.0),
+        **camb_cfg.get("set_cosmology", {}),
     )
     pars.InitPower.set_params(As=1e-10 * np.exp(cosmology["logA"]), ns=cosmology["ns"])
     pars.set_for_lmax(**camb_cfg["set_for_lmax"])
@@ -242,8 +253,14 @@ def run(cfg: dict, comm: Any = None) -> str:
     camb_pars = build_camb_params(camb_cfg, {**cosmo_cfg["fiducial"], **fixed})
 
     # Every rank checks: this must abort the whole job, not just rank 0.
+    #
+    # Against the *requested* lensed lmax, not camb_pars.max_l. The latter is
+    # lmax + lens_margin (8550 for a 6500 run) — the margin exists precisely
+    # because lensed spectra are not trustworthy up there, so checking against it
+    # would wave through bandpowers that meet unreliable theory. CAMB does return
+    # values in that range, so the failure would be quiet rather than zeroed.
     windows.check_theory_lmax(
-        names, likelihoods, camb_pars.max_l,
+        names, likelihoods, int(camb_cfg["set_for_lmax"]["lmax"]),
         tol=float(camb_cfg.get("window_support_tol", 1e-3)),
     )
 

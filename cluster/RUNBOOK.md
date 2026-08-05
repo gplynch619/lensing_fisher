@@ -248,6 +248,72 @@ few likelihood evaluations, but only ~15% perturb a cosmological parameter at al
 `1950 * 0.15 * 4 * t_camb / 15 ranks`. If that lands anywhere near the walltime,
 raise ranks or split the job before submitting. Report the number.
 
+### Then check whether the accuracy settings are good enough
+
+`camb.accuracy` in the config is inherited from the pre-2026 run
+(`AccuracyBoost 1.0`, `lSampleBoost 1.0`, `lAccuracyBoost 1.2`). A Fisher matrix
+is more demanding of these than a chain is: it is a second derivative taken by
+finite differences, so noise `eps` in `C_ell` enters the answer as `~eps/h^2`,
+an amplification of order `1e4` at `h ~ 0.01`. Absolute accuracy largely cancels
+between the `+h` and `-h` evaluations; *smoothness in the parameters* does not.
+
+Rather than guess, measure the thing that matters — the stability of a second
+difference — at the current settings and at boosted ones:
+
+```bash
+python - <<'PY'
+import numpy as np, camb, time
+
+def d2_logl_proxy(boost, h=0.01, H0=67.37):
+    """Second difference of the TT spectrum in H0, at one accuracy setting."""
+    out = []
+    for f in (1 - 2*h, 1 - h, 1.0, 1 + h, 1 + 2*h):
+        p = camb.CAMBparams()
+        p.set_cosmology(H0=H0*f, ombh2=0.02233, omch2=0.1198, tau=0.054, mnu=0.06,
+                        bbn_predictor='PArthENoPE_880.2_standard.dat',
+                        nnu=3.044, num_massive_neutrinos=1)
+        p.InitPower.set_params(As=1e-10*np.exp(3.043), ns=0.9652)
+        p.set_for_lmax(6500, lens_potential_accuracy=8, lens_margin=2050)
+        p.set_matter_power(kmax=10, k_per_logint=130, nonlinear=True)
+        p.set_accuracy(AccuracyBoost=boost[0], lSampleBoost=boost[1],
+                       lAccuracyBoost=boost[2], DoLateRadTruncation=False,
+                       min_l_logl_sampling=6000)
+        out.append(camb.get_results(p).get_total_cls(6500, CMB_unit='muK')[:, 0])
+    a, b, c, d, e = out
+    # the 4th-order stencil the Fisher actually uses
+    return (-a + 16*b - 30*c + 16*d - e) / (12 * (H0*h)**2)
+
+t = time.time(); base = d2_logl_proxy((1.0, 1.0, 1.2)); t_base = time.time()-t
+t = time.time(); high = d2_logl_proxy((2.0, 2.0, 2.0)); t_high = time.time()-t
+ell = np.arange(base.size)
+m = (ell >= 600) & (ell <= 6300)
+rel = np.abs(high[m] - base[m]) / np.maximum(np.abs(high[m]), 1e-30)
+print(f"time  base {t_base:6.1f}s   boosted {t_high:6.1f}s   ratio {t_high/t_base:.1f}x")
+print(f"d2C_TT/dH0^2 relative change, 600<ell<6300: "
+      f"median {np.median(rel):.2e}  90th {np.percentile(rel,90):.2e}")
+PY
+```
+
+Interpretation: if the second difference is stable to well under a percent, the
+current settings are fine and the boosts only cost time. If it moves at the
+percent level or worse, raise `lSampleBoost` first — it is the direct lever,
+setting how densely `ell` is sampled before spline interpolation, which is where
+parameter-dependent wiggle enters. Report both numbers and the cost ratio before
+changing anything; at lmax 6500 the boosted settings can be several times slower,
+which interacts with the walltime above.
+
+**lmax stays 6500, not 9000.** ACT's window support ends at 6308 with zero weight
+above 6500 (measured, see check 3), and `lens_margin: 2050` already computes the
+unlensed spectra to 8550 for the lensing convolution. 9000 roughly doubles the
+cost of every CAMB call for bandpowers that do not exist.
+
+**`recombination_model: CosmoRec` is not set, deliberately.** It is a real physics
+change — a few times 0.1% in the damping tail, where ACT and SPT live — but the
+Cobaya chain configs do not set it either, and adopting it in one and not the
+other is worse than adopting it in neither. It also requires CosmoRec to be built
+and visible to CAMB. If you want it, it has to go into both, and both should then
+be rerun. Its effect on a *curvature* is second order in any case.
+
 ### One pass
 
 ```bash

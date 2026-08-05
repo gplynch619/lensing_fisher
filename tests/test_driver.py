@@ -141,3 +141,35 @@ def test_clpp_steps_interpolate_onto_a_changed_grid(tmp_path):
     )
     assert steps.size == 8
     assert np.all(np.diff(steps) > 0)                 # still rising with L
+
+
+def test_theory_lmax_guard_uses_requested_lmax_not_max_l():
+    """camb_pars.max_l is lmax + lens_margin, where lensed spectra are unreliable.
+
+    Checking window support against max_l would accept bandpowers sitting in the
+    lens_margin region. CAMB returns numbers there, so the error would be silent.
+    """
+    import inspect
+    from lensing_fisher import driver
+
+    src = inspect.getsource(driver.run)
+    call = src[src.index("check_theory_lmax"):src.index("bin_edges = resolve")]
+    assert "set_for_lmax" in call and "max_l" not in call
+
+
+def test_camb_cosmology_extras_reach_set_cosmology():
+    """bbn_predictor must be settable: CAMB's default differs from the chains'."""
+    camb = pytest.importorskip("camb")
+    from lensing_fisher.driver import build_camb_params
+
+    cosmology = {"H0": 67.37, "ombh2": 0.02233, "omch2": 0.1198,
+                 "tau": 0.054, "logA": 3.043, "ns": 0.9652, "mnu": 0.06}
+    cfg = {"set_for_lmax": {"lmax": 500, "lens_potential_accuracy": 1},
+           "matter_power": {"kmax": 2}, "accuracy": {"AccuracyBoost": 1.0}}
+
+    default = build_camb_params(cfg, cosmology)
+    parthenope = build_camb_params(
+        {**cfg, "set_cosmology": {"bbn_predictor": "PArthENoPE_880.2_standard.dat"}},
+        cosmology,
+    )
+    assert default.YHe != parthenope.YHe

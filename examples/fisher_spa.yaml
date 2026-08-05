@@ -37,6 +37,16 @@ cosmology:
   # which constrains tau directly. Adding both would double-count.
 
 camb:
+  # Must match the chain configs' theory.camb.extra_args, or the Fisher and the
+  # chain describe different models. nnu and halofit_version are CAMB 1.6.4
+  # defaults and are stated only so a default change cannot silently split them;
+  # bbn_predictor is NOT the default (CAMB 1.6.4 uses PRIMAT) and materially
+  # changes Y_He, hence the damping tail where ACT and SPT dominate.
+  set_cosmology:
+    bbn_predictor: PArthENoPE_880.2_standard.dat
+    nnu: 3.044
+    num_massive_neutrinos: 1
+
   set_for_lmax:
     # Must cover the data. ACT DR6 bandpowers reach ell ~ 6126; the old
     # reference run used lmax 2500 and fed those bins zero theory. The
@@ -49,6 +59,17 @@ camb:
     k_per_logint: 130
     nonlinear: true
   accuracy:
+    # These carry over from the pre-2026 run. A Fisher matrix has a stronger
+    # claim on them than a chain does: it is a second derivative taken by finite
+    # differences, so numerical noise eps in C_ell lands in the answer as
+    # ~eps/h^2, an amplification of order 1e4 at h ~ 0.01. What matters is
+    # therefore the *smoothness* of CAMB's output in the parameters, not its
+    # absolute accuracy — and lSampleBoost is the direct lever, since it sets
+    # how densely ell is sampled before spline interpolation.
+    #
+    # Raising these costs real time at lmax 6500 / lens_potential_accuracy 8.
+    # Measure before committing: cluster/RUNBOOK.md has a second-difference
+    # stability check that answers it in ~12 CAMB calls rather than a rerun.
     AccuracyBoost: 1.0
     lSampleBoost: 1.0
     lAccuracyBoost: 1.2
