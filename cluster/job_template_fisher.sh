@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -N 1
 #SBATCH -J {{JOB_NAME}}
-#SBATCH -t 2-11:00
+#SBATCH -t 0-03:00
 #SBATCH -A leknoxgrp
 #SBATCH --partition=high
 #SBATCH --mem-per-cpu=4000M
@@ -31,8 +31,12 @@
 #   ntasks raises memory roughly linearly. Raise it only after seff says there is
 #   headroom.
 #
-# WALLTIME is a guess carried over from a much smaller job (27 bins at lmax
-# 2500). Benchmark before trusting it — see cluster/RUNBOOK.md.
+# WALLTIME is now measured, not guessed. The 51-bin lmax-6500 run took 13
+# minutes: cost is set by the number of *unique cosmologies*, not by the element
+# count, since a mixed derivative in one cosmological and one non-cosmological
+# parameter reuses the same +/-h CAMB solves. For n_c cosmological parameters
+# that is 4*n_c + 4*n_c*(n_c-1)/2 + 1 solves = 85 at n_c = 6, against ~16 s each.
+# 3 hours leaves room for a larger grid; raise it if n_c grows.
 
 source /home/gplynch/projects/mnu_hunter/lensing_fisher/cluster/env.sh
 

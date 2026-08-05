@@ -1,0 +1,171 @@
+# Job C — the SPA template chain: A_template free, lensing the primary CMB with a
+# FROZEN C_L^pp instead of CAMB's self-consistent one.
+#
+#   ./cluster/submit_job.sh -f examples/chain_spa_template.yaml \
+#                           -t cluster/job_template_chain.sh
+#
+# This is the measurement the whole project builds toward. Tracks A and B supply
+# its two inputs: A gives the template (the lensing power the *unlensed* CMB
+# predicts), B gives the L range that template amplitude is actually sensitive to.
+# A_template = 1 means the lensed data see exactly the lensing the unlensed data
+# predict; a deviation is the result.
+#
+# Supersedes input/base__SPA.yaml, the pre-2026 version. Two things change:
+#
+#   1. The likelihoods are the same clipy/candl stack the Fisher uses, via one
+#      shared dataset file. The old config mixed Cobaya-native Planck
+#      (planck_2018_lowl.TT/EE, act_dr6_cmbonly.PlanckActCut) with candl SPT while
+#      the Fisher used clipy throughout -- the SPA1/SPA2 inconsistency recorded in
+#      results/notes/update.tex. Now there is one definition of the data.
+#
+#      That also fixes a silent error: the old config's `planck_2018_lowl.EE` is
+#      the 2018 simall (offlike5), NOT sroll2. Both load, both constrain tau, and
+#      they differ. datasets/spa.yaml names the sroll2 file explicitly.
+#
+#   2. The template is the A1 (UP-P) best fit rather than the pre-2026 pickle.
+#
+# NOTE ON TAU: this set includes sroll2, so tau is measured, not prior-driven, and
+# ACT's and SPT's internal stand-in tau priors are dropped in the dataset file.
+# The prior below is [0.01, 0.15]; the pre-2026 config used [0.0, 0.1], which both
+# truncated the posterior from above and allowed tau -> 0. Use CAMB, never the
+# cmb_alens_spt_* emulators, anywhere near this likelihood.
+
+theory:
+  camb:
+    external: !!python/name:lensing_fisher.template_lensing.TemplateLensingCAMB
+    python_path: ${LENSING_FISHER_ROOT}/src
+
+    # The frozen C_L^pp. A_template scales THIS, so it defines what A_template
+    # means. Same convention as the Fisher's bins.template.file:
+    # [L(L+1)]^2 C_L^phiphi / 2pi, running to L=10950.
+    clpp_template_file: ${MNU_HUNTER_ROOT}/data/up_p_bestfit_pp.pkl
+
+    # Accuracy carried over verbatim from the pre-2026 run
+    # (data/template_chain/SPA.input.yaml).
+    #
+    # `lmax: 6000` is a FLOOR, not a cap: cobaya sets
+    #   extra_args["lmax"] = max(max(requirements), extra_args["lmax"])
+    # (theories/camb/camb.py), and CandlClipyCombined requests 6324 -- where ACT's
+    # bandpower windows actually stop carrying weight. So the run computes to 6324
+    # and the small-scale data is covered. It is left at 6000 to stay verbatim;
+    # nothing depends on the number.
+    #
+    # The old config reached the same place by a different route: its
+    # Cobaya-native ACT likelihood set `lmax_theory: 9500`, which is safe but
+    # computes 3000 multipoles of theory that no bandpower touches.
+    extra_args:
+      AccuracyBoost: 1
+      bbn_predictor: PArthENoPE_880.2_standard.dat
+      halofit_version: mead2020
+      lAccuracyBoost: 1
+      lSampleBoost: 1
+      lens_margin: 1250
+      lens_potential_accuracy: 4
+      lmax: 6000
+      mnu: 0.06
+      nnu: 3.044
+      num_massive_neutrinos: 1
+      theta_H0_range: [40, 100]
+
+likelihood:
+  lensing_fisher.cobaya_likelihood.CandlClipyCombined:
+    # The same file fisher_spa.yaml reads. Planck plik-lite cropped to TT<=1000
+    # and TE/EE<=600 where ACT takes over; ACT DR6 TT/TE/EE from 600 to its full
+    # reach; SPT-3G uncut; commander + sroll2 at low ell. Verified on this build:
+    # Planck crops to TT 30-999 / TE,EE 30-594, ACT keeps 135/135 bandpowers.
+    dataset_file: ${LENSING_FISHER_ROOT}/examples/datasets/spa.yaml
+    # Keep candl's internal Gaussian priors so the chain and the Fisher use
+    # identical priors. The params below therefore declare the nuisances with
+    # wide FLAT priors only -- do not add Gaussian ones here.
+    clear_internal_priors: false
+
+params:
+  ombh2:
+    prior: {min: 0.017, max: 0.027}
+    ref: {dist: norm, loc: 0.02239, scale: 0.0021}
+    proposal: 6.5e-05
+    latex: \Omega_\mathrm{b}h^2
+  omch2:
+    prior: {min: 0.09, max: 0.15}
+    ref: {dist: norm, loc: 0.12, scale: 0.026}
+    proposal: 0.0011
+    latex: \Omega_\mathrm{c}h^2
+  cosmomc_theta:
+    prior: {min: 0.0103, max: 0.0105}
+    ref: {dist: norm, loc: 0.010417, scale: 6.7e-05}
+    proposal: 1.0e-05
+    latex: \theta_\mathrm{MC}
+  logA:
+    prior: {min: 2.6, max: 3.5}
+    ref: {dist: norm, loc: 3.045, scale: 0.24}
+    proposal: 0.0036
+    latex: \log(10^{10} A_\mathrm{s})
+  As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+    derived: true
+  ns:
+    prior: {min: 0.9, max: 1.1}
+    ref: {dist: norm, loc: 0.9649, scale: 0.061}
+    proposal: 0.0033
+    latex: n_\mathrm{s}
+  tau:
+    prior: {min: 0.01, max: 0.15}
+    ref: {dist: norm, loc: 0.0544, scale: 0.0073}
+    proposal: 0.0073
+    latex: \tau_\mathrm{reio}
+
+  # The measurement. Centred on 1 because that is the null: the lensed data see
+  # exactly the lensing the unlensed data predict.
+  A_template:
+    prior: {min: 0.5, max: 1.5}
+    ref: {dist: norm, loc: 1.0, scale: 0.05}
+    proposal: 0.03
+    latex: A_{\rm template}
+
+  # Nuisance. Flat and wide: the Gaussian constraints come from the likelihoods.
+  #
+  # A_planck is NOT free -- it takes A_act's value, one shared calibration across
+  # Planck and ACT. The same tie is declared in datasets/spa.yaml so the Fisher
+  # varies the same set; tests/test_tied_parameters.py checks they agree.
+  #
+  # No `cal_dip_prior` here, unlike the pre-2026 config. That added an explicit
+  # N(1.0, 0.003) on A_act on top of candl's own internal A_act prior, which is
+  # kept by clear_internal_priors: false -- counting it twice.
+  A_planck:
+    value: 'lambda A_act: A_act'
+    latex: A_{\rm Planck}
+  Ecal:
+    prior: {min: 0.8, max: 1.2}
+    ref: 1.0
+    proposal: 0.005
+    latex: E_{\rm cal}
+  Tcal:
+    prior: {min: 0.9, max: 1.1}
+    ref: 1.0
+    proposal: 5.0e-05
+    latex: T_{\rm cal}
+  A_act:
+    prior: {min: 0.9, max: 1.1}
+    ref: 1.0
+    proposal: 0.003
+    latex: A_{\rm ACT}
+  P_act:
+    prior: {min: 0.9, max: 1.1}
+    ref: 1.0
+    proposal: 0.01
+    latex: p_{\rm ACT}
+
+  H0: {latex: H_0, derived: true}
+  sigma8: {latex: \sigma_8, derived: true}
+  thetastar: {latex: \theta_\star, derived: true}
+
+sampler:
+  mcmc:
+    drag: true
+    oversample_power: 0.4
+    proposal_scale: 1.9
+    Rminus1_stop: 0.02
+    Rminus1_cl_stop: 0.2
+
+output: ${MNU_HUNTER_ROOT}/data/spa_template/spa_template

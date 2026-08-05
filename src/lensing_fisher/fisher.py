@@ -161,11 +161,21 @@ class FisherMatrix:
         # Cheapest bucket (perturbs nothing expensive) first, then by size.
         ordered_keys = sorted(buckets, key=lambda k: (len(k), sorted(k)))
 
-        mine = []
+        # One counter across all buckets rather than restarting per bucket. The
+        # cosmology-pair buckets hold exactly one element each, so a per-bucket
+        # counter always evaluated n=0 and dealt every one of them to rank 0 —
+        # which then carried four fresh CAMB solves apiece while the other ranks
+        # idled. Rank 0 did 85 of a 61-parameter run's solves against ~25
+        # elsewhere, for 42% CPU efficiency. Carrying the offset spreads them.
+        #
+        # Locality is unaffected: a rank still takes every size-th element
+        # *within* a bucket, so consecutive tasks still share a cosmology.
+        mine, n = [], 0
         for key in ordered_keys:
-            for n, task in enumerate(buckets[key]):
+            for task in buckets[key]:
                 if n % self.size == self.rank:
                     mine.append(task)
+                n += 1
         return mine
 
     # ------------------------------------------------------------------
@@ -222,15 +232,28 @@ class FisherMatrix:
         return self.matrix
 
     def parameter_errors(self) -> np.ndarray:
-        """1-sigma marginalized errors, sqrt(diag(F^-1))."""
-        return np.sqrt(np.diag(np.linalg.inv(self._require_matrix())))
+        """1-sigma marginalized errors, sqrt(diag(F^-1)).
+
+        NaN wherever the matrix is degenerate, which on a fine bin grid is the
+        normal case rather than a fault — see :meth:`summary`.
+        """
+        with np.errstate(invalid="ignore"):
+            return np.sqrt(np.diag(np.linalg.inv(self._require_matrix())))
 
     def summary(self) -> None:
-        """Print parameter errors and the eigenvalue spectrum.
+        """Print parameter errors and the resolved-mode spectrum.
 
-        Non-positive eigenvalues mean the matrix is not a valid information
-        matrix — usually a step size too small for a parameter, so its second
-        difference is dominated by numerical noise.
+        A fine ``clpp`` grid is deliberately over-parametrized: the lensed CMB
+        responds to C_L^pp through a broad smoothing, so adjacent bins are
+        degenerate and only a handful of linear combinations are resolved. The
+        unresolved directions have a true eigenvalue of zero, which finite
+        differences scatter to either side of it — so a rank-deficient matrix
+        with some small negative eigenvalues is the *expected* output here, not a
+        symptom of a step size being too small.
+
+        What that does cost is the per-parameter sigma, which needs F^-1 and is
+        reported as ``--`` for the degenerate directions. It does not affect
+        ``L_eff`` or the weight density, which are quadratic forms in F.
         """
         F = self._require_matrix()
         print("=" * 60)
@@ -242,15 +265,26 @@ class FisherMatrix:
         for name, fid, step, err in zip(
             self.param_names, self.fiducial.values(), self.step_sizes, errors
         ):
-            print(f"  {name:>12s}  fid={fid:12.6g}  step={step:9.3g}  sigma={err:12.6g}")
+            shown = f"{err:12.6g}" if np.isfinite(err) else f"{'--':>12s}"
+            print(f"  {name:>12s}  fid={fid:12.6g}  step={step:9.3g}  sigma={shown}")
 
         eig = np.sort(np.linalg.eigvalsh(F))[::-1]
-        print(f"\nEigenvalues: max={eig[0]:.4e}  min={eig[-1]:.4e}  "
-              f"condition={eig[0] / eig[-1]:.3e}")
+        # Resolved relative to the largest eigenvalue: the absolute scale is set
+        # by whichever parameter happens to be best measured and means nothing.
+        resolved = int(np.sum(eig > 1e-8 * eig[0]))
+        print(f"\nEigenvalues: max={eig[0]:.4e}  min={eig[-1]:.4e}")
+        print(f"Resolved modes: {resolved}/{self.n_params} above 1e-8 x max "
+              f"({int(np.sum(eig > 1e-3 * eig[0]))} above 1e-3 x max)")
+
         n_bad = int(np.sum(eig <= 0))
         if n_bad:
-            print(f"  WARNING: {n_bad} non-positive eigenvalue(s); the matrix is "
-                  f"not positive definite")
+            worst = abs(eig[-1]) / eig[0]
+            print(f"  {n_bad} non-positive eigenvalue(s), the most negative "
+                  f"{worst:.1e} x max in magnitude.")
+            print(f"  Expected when bins outnumber the modes the data resolves; "
+                  f"these are zeros blurred by\n  finite differences. Per-bin "
+                  f"sigma is undefined for them (shown '--'); L_eff and w(L) are "
+                  f"unaffected.")
         print("=" * 60)
 
     def save(self, directory: str, filename: str, metadata: Optional[dict] = None) -> str:

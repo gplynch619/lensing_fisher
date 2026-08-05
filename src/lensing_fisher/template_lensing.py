@@ -131,12 +131,30 @@ class TemplateLensingCAMB(CAMB):
         L_template = self.L_template
         CL_pp_fid = self.CL_pp_fid
         
-        # Filter out zero/negative values for log interpolation
+        # Filter out zero/negative values for log interpolation.
+        #
+        # L = 0 and 1 are zero in every template by convention -- the monopole and
+        # dipole of the lensing potential do not lens anything, and
+        # get_lens_potential_cls always returns two leading zeros. That case is
+        # expected, so it is filtered silently. Warning on it fired once per
+        # theory evaluation: 2396 lines in the first 16 minutes of the SPA
+        # template chain, on course for ~650k over the run, which would bury the
+        # warnings that do matter (a non-finite likelihood, say).
+        #
+        # A non-positive value at L >= 2 is a real problem -- it means the
+        # template is corrupt or has been extrapolated somewhere it should not be
+        # -- so that still warns, but once per instance rather than once per call.
         valid_mask = (L_template > 0) & (CL_pp_fid > 0)
         if not np.all(valid_mask):
-            self.log.warning(
-                "Some template values are non-positive. Using only valid values for interpolation."
-            )
+            unexpected = np.flatnonzero(~valid_mask & (L_template > 1))
+            if unexpected.size and not getattr(self, "_warned_nonpositive", False):
+                self._warned_nonpositive = True
+                self.log.warning(
+                    "Template has %d non-positive value(s) at L >= 2 (first at "
+                    "L=%g); dropping them for the log interpolation. This is not "
+                    "the usual L=0,1 convention -- check the template.",
+                    unexpected.size, L_template[unexpected[0]],
+                )
             L_template = L_template[valid_mask]
             CL_pp_fid = CL_pp_fid[valid_mask]
         

@@ -128,13 +128,30 @@ class BinnedLensingTheory:
         CAMB results objects to retain. Elements of the Fisher matrix are ordered
         so that runs of them share a cosmology (see ``FisherMatrix._tasks``), so
         a handful of entries gives a near-perfect hit rate.
+    cosmology_kwargs
+        Everything ``camb.set_cosmology`` needs *besides* the parameters being
+        varied — the fixed cosmology (``mnu``, ``omk``) and the config's
+        ``camb.set_cosmology`` block (``bbn_predictor``, ``nnu``,
+        ``num_massive_neutrinos``).
+
+        These must be re-supplied on every call. ``set_cosmology`` recomputes
+        ``YHe`` from the BBN predictor each time it runs, so omitting
+        ``bbn_predictor`` here does not leave the value set by
+        :func:`~lensing_fisher.driver.build_camb_params` in place — it silently
+        reverts to CAMB's default (PRIMAT in 1.6.4, against the PArthENoPE the
+        Cobaya chains ask for) on the first cache miss and stays there. That is a
+        0.19% shift in ``YHe``, landing in the damping tail where ACT and SPT
+        carry their weight, and it would make this Fisher describe a different
+        model from the chains.
     """
 
-    def __init__(self, camb_pars, bin_edges, clpp_fid, steepness=2.0, cache_size=4):
+    def __init__(self, camb_pars, bin_edges, clpp_fid, steepness=2.0, cache_size=4,
+                 cosmology_kwargs=None):
         import camb
 
         self._camb = camb
         self.camb_pars = camb_pars
+        self.cosmology_kwargs = dict(cosmology_kwargs or {})
         self.bin_edges = np.asarray(bin_edges, dtype=float)
 
         n_ell = camb_pars.max_l + 1
@@ -163,13 +180,17 @@ class BinnedLensingTheory:
             return self._cache[key]
 
         self.cache_stats["misses"] += 1
+        # Fixed values first, then anything the Fisher is actually varying, so a
+        # parameter promoted to the free vector (mnu, say) overrides its fixed
+        # counterpart rather than being silently pinned.
+        kwargs = dict(self.cosmology_kwargs)
+        kwargs.update({k: pars[k] for k in ("mnu", "omk") if k in pars})
         self.camb_pars.set_cosmology(
             H0=pars["H0"],
             ombh2=pars["ombh2"],
             omch2=pars["omch2"],
-            mnu=pars.get("mnu", 0.06),
-            omk=pars.get("omk", 0.0),
             tau=pars["tau"],
+            **kwargs,
         )
         self.camb_pars.InitPower.set_params(As=np.exp(pars["logA"]) * 1e-10, ns=pars["ns"], r=0)
 

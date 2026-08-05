@@ -272,3 +272,97 @@ def test_summarize_roundtrip(tmp_path):
     assert 20.0 < out["L_eff"] < 400.0
     assert out["L_minus"] < out["L_eff"] < out["L_plus"]
     assert out["sigma_A_template"] > 0
+
+
+def test_bin_averaged_ratio_rejects_underspecified_bins():
+    """One sample integrates to zero, so r_j would be a silent NaN."""
+    edges = np.array([2.0, 2.5, 3.0, 100.0])
+    L = np.arange(2, 101, dtype=float)          # nothing inside [2.5, 3.0)
+    c = 1e-7 * (L / 100.0) ** -2
+    with pytest.raises(ValueError, match="at least 2"):
+        analysis.bin_averaged_ratio(edges, c, c, L)
+
+
+def test_summarize_handles_bins_narrower_than_a_multipole(tmp_path):
+    """The iteration-0 grid: log-spaced from L=2, several bins hold no integer.
+
+    r_j is a quadrature over smooth functions, so summarize must sample the bins
+    rather than rely on the integer grid.
+    """
+    import pickle
+
+    edges = np.concatenate([np.geomspace(2.0, 200.0, 21), [400.0]])
+    n_bins = edges.size - 1
+    assert min(int(np.floor(edges[j + 1]) - np.ceil(edges[j]) + 1)
+               for j in range(n_bins)) <= 0          # some bin holds no integer
+
+    names = ["H0"] + [f"clpp_{i+1}" for i in range(n_bins)]
+    F = np.diag(np.concatenate([[1.0], np.linspace(1.0, 5.0, n_bins)]))
+    clpp_fid = np.concatenate([[0.0, 0.0], 1e-7 * (np.arange(2, 501) / 100.0) ** -2])
+
+    template = tmp_path / "tem.pkl"
+    L = np.arange(clpp_fid.size)
+    pickle.dump({"L": L, "CL_pp_fid": clpp_fid * 0.99}, open(template, "wb"))
+
+    fisher = {"fisher_matrix": F, "param_names": names, "bin_edges": edges,
+              "clpp_fid": clpp_fid, "steepness": 2.0}
+    out = analysis.summarize(fisher, template_file=str(template))
+
+    assert np.all(np.isfinite(out["r"]))
+    assert np.allclose(out["r"], 0.99, rtol=2e-3)    # uniform rescaling -> r = 0.99
+    assert np.isfinite(out["L_eff"])
+
+
+def _summarize_fixture(last_edge, tail_fraction):
+    """A peaked weight distribution plus a catch-all bin of adjustable width.
+
+    ``tail_fraction`` is the catch-all's share of the total information; the real
+    SPA iteration 1 had 2.1% of it spread over a bin 7551 wide.
+    """
+    edges = np.concatenate([np.linspace(2.0, 200.0, 20), [last_edge]])
+    n = edges.size - 1
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    diag = np.exp(-0.5 * ((centres - 100.0) / 40.0) ** 2) + 1e-3
+    diag[-1] = tail_fraction * diag[:-1].sum()
+    F = np.diag(np.concatenate([[1.0], diag]))
+    names = ["H0"] + [f"clpp_{i+1}" for i in range(n)]
+    return {"fisher_matrix": F, "param_names": names, "bin_edges": edges,
+            "clpp_fid": np.ones(int(last_edge) + 1), "steepness": 2.0}
+
+
+def test_catchall_bin_is_excluded_from_the_moments():
+    """A wide, near-empty final bin must not drag the mean.
+
+    weight_density spreads a bin's information uniformly, so a bin running to
+    CAMB's lmax contributes an enormous lever arm to <L>. Iteration 1 of the SPA
+    run moved L_eff from 164 to 261 on this alone.
+    """
+    narrow = analysis.summarize(_summarize_fixture(400.0, 0.02))
+    wide = analysis.summarize(_summarize_fixture(8550.0, 0.02))
+
+    # Same physics, catch-all 20x wider: the moments must not notice.
+    assert np.isclose(narrow["L_eff"], wide["L_eff"], rtol=1e-9)
+    assert np.isclose(narrow["L_median"], wide["L_median"], rtol=1e-9)
+    assert wide["excluded_catchall"] and wide["moment_L_max"] == 200.0
+
+    # ... whereas including it is exactly the failure mode being guarded against.
+    # The real run inflated L_eff by 1.59x (164.2 -> 261.2) on a 2.1% tail.
+    leaky = analysis.summarize(_summarize_fixture(8550.0, 0.02),
+                               exclude_catchall=False)
+    assert leaky["L_eff"] > 1.25 * wide["L_eff"]
+    assert wide["excluded_information"] < 0.05      # a 2% tail, reported
+
+
+def test_median_is_reported_and_robust_to_the_tail():
+    wide = analysis.summarize(_summarize_fixture(8550.0, 0.02), exclude_catchall=False)
+    # The mean is dragged past its own 68% upper bound; the median is not.
+    assert wide["L_eff"] > wide["L_plus"]
+    assert wide["L_minus"] < wide["L_median"] < wide["L_plus"]
+
+
+def test_weight_quantile_matches_a_known_cdf():
+    L = np.linspace(0.0, 100.0, 1001)
+    w = np.ones_like(L)                       # uniform -> quantile is linear in L
+    assert np.isclose(analysis.weight_quantile(w, L, 0.5), 50.0, atol=1e-6)
+    assert np.allclose(analysis.weight_quantile(w, L, [0.25, 0.75]), [25.0, 75.0],
+                       atol=1e-6)

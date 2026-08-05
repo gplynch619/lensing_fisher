@@ -166,10 +166,39 @@ class CandlClipyCombined(Likelihood):
         return out
 
     def logp(self, **params_values):
+        """Sum of the component log-likelihoods, or ``-inf`` if any is not finite.
+
+        The guard is load-bearing, not defensive tidiness. Cobaya evaluates the
+        posterior with ``make_finite=True``, which is ``np.nan_to_num`` — and that
+        maps NaN to **0.0**, not to a bad value. A NaN from any one likelihood
+        therefore becomes a log-likelihood of zero, i.e. a perfect fit, better
+        than any real point in the space. A minimizer walks straight into it and
+        a chain that proposes one can never leave.
+
+        This is not hypothetical: it sank the first UP-PAS minimization
+        (2026-08-05). Two of sixteen starts ran to the corner of the prior box
+        (logA at its 3.5 maximum, tau 0.140) and reported -logpost = -25.3613,
+        which is exactly minus the log-prior volume — the signature of a
+        likelihood contributing precisely zero. Returning -inf instead lets
+        ``make_finite`` do the right thing, since it maps -inf to -1.8e308.
+        """
         cl = self.provider.get_Cl(ell_factor=True, units="muK2")
         total = 0.0
-        for like in self._likes:
+        for name, like in zip(self._names, self._likes):
             pars = dict(params_values)
             pars["Dl"] = self._slice_for(cl, like)
-            total += float(like.log_like(pars))
+            value = float(like.log_like(pars))
+            if not np.isfinite(value):
+                self._n_nonfinite = getattr(self, "_n_nonfinite", 0) + 1
+                # Loud once, then quiet: a chain skirting the prior boundary can
+                # hit this often, and a flood of warnings would bury it.
+                report = self.log.warning if self._n_nonfinite == 1 else self.log.debug
+                report(
+                    "%s returned a non-finite log-likelihood (%r); rejecting this "
+                    "point (occurrence %d). Parameters: %r",
+                    name, value, self._n_nonfinite,
+                    {k: v for k, v in sorted(params_values.items())},
+                )
+                return -np.inf
+            total += value
         return total

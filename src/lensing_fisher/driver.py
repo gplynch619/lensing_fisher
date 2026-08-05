@@ -162,9 +162,34 @@ def clpp_step_sizes(step_cfg, bin_edges: np.ndarray) -> np.ndarray:
     from .analysis import load_fisher, marginalize
 
     previous = load_fisher(step_cfg["from_fisher"])
-    sigma_prev = np.sqrt(np.diag(np.linalg.inv(
-        marginalize(previous["fisher_matrix"], previous["param_names"])
-    )))
+
+    # A per-bin sigma only exists if the marginalized block is invertible, and on
+    # a fine grid it is not: the lensed CMB responds to C_L^pp through a broad
+    # smoothing, so adjacent bins are degenerate and only a handful of
+    # combinations are resolved. Exactly singular raises; the usual near-singular
+    # case inverts fine and returns NaN, which would otherwise propagate into the
+    # step sizes and produce a Fisher matrix of quiet garbage.
+    n_bins_prev = len(np.asarray(previous["bin_edges"], dtype=float)) - 1
+    try:
+        F_lens = marginalize(previous["fisher_matrix"], previous["param_names"])
+        with np.errstate(invalid="ignore"):
+            sigma_prev = np.sqrt(np.diag(np.linalg.inv(F_lens)))
+        n_bad = int(np.sum(~np.isfinite(sigma_prev)))
+        n_modes = int(np.sum(np.linalg.eigvalsh(F_lens) > 0))
+    except np.linalg.LinAlgError:
+        n_bad, n_modes = n_bins_prev, 0
+
+    if n_bad:
+        raise ValueError(
+            f"{step_cfg['from_fisher']}: {n_bad} of {n_bins_prev} per-bin sigmas "
+            f"are not finite — the marginalized clpp block is rank-deficient "
+            f"({n_modes} positive modes for {n_bins_prev} bins), so sigma(q_j) "
+            f"does not exist and cannot size the steps.\n"
+            f"Use a scalar bins.step_size instead. This is not a numerical "
+            f"failure and coarser bins will not necessarily fix it; L_eff and the "
+            f"weight density are unaffected, since they need F @ r rather than "
+            f"inv(F)."
+        )
 
     prev_edges = np.asarray(previous["bin_edges"], dtype=float)
     prev_centers = 0.5 * (prev_edges[:-1] + prev_edges[1:])
@@ -274,6 +299,10 @@ def run(cfg: dict, comm: Any = None) -> str:
         camb_pars, bin_edges, clpp_fid,
         steepness=float(bins_cfg.get("steepness", 2.0)),
         cache_size=int(bins_cfg.get("camb_cache_size", 4)),
+        # Not optional: set_cosmology is called afresh on every cache miss and
+        # rederives YHe from the BBN predictor each time, so these have to travel
+        # with it. See BinnedLensingTheory's docstring.
+        cosmology_kwargs={**fixed, **camb_cfg.get("set_cosmology", {})},
     )
 
     tied = cfg.get("tied_parameters") or {}

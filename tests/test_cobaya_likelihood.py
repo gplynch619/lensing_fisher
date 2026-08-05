@@ -112,3 +112,33 @@ def test_logp_sums_and_slices_per_likelihood(stub_backend, monkeypatch):
 def test_missing_dataset_and_likelihoods_raises(stub_backend):
     with pytest.raises(ValueError, match="needs either 'dataset_file'"):
         CandlClipyCombined({"stop_at_error": True})
+
+
+@pytest.mark.parametrize("bad", [np.nan, -np.inf, np.inf], ids=["nan", "neginf", "posinf"])
+def test_logp_rejects_a_non_finite_component(stub_backend, monkeypatch, bad):
+    """A NaN component must become -inf, never a sum that cobaya reads as zero.
+
+    Cobaya evaluates the posterior with make_finite=True, i.e. np.nan_to_num,
+    which maps NaN to 0.0 — a *perfect* log-likelihood. The first UP-PAS
+    minimization walked two of sixteen starts into exactly that: simall returned
+    NaN at tau=0.14 and the reported -logpost was -25.3613, precisely minus the
+    log-prior volume.
+    """
+    monkeypatch.setattr("lensing_fisher.cobaya_likelihood.effective_ell_max",
+                        lambda like, tol: int(like.ell_max))
+    spec = {k: dict(v) for k, v in SPEC.items()}
+    spec["act_like"]["logl"] = bad
+    wrapper = CandlClipyCombined({"likelihoods": spec, "stop_at_error": True})
+
+    ells = np.arange(0, 2501)
+    cl = {"ell": ells, "tt": ells * 1.0, "te": ells * 2.0, "ee": ells * 3.0, "bb": ells * 0.0}
+
+    class _Provider:
+        def get_Cl(self, **kwargs):
+            return cl
+
+    wrapper.provider = _Provider()
+    out = wrapper.logp(A_planck=1.0, A_act=1.0, P_act=1.0)
+    assert out == -np.inf
+    # the trap: nan_to_num would have turned a NaN sum into a perfect fit
+    assert np.nan_to_num(out) < 0

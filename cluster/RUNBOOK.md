@@ -74,7 +74,7 @@ Run these on a login node. Each takes seconds and each has caught a real problem
 ```bash
 source cluster/env.sh
 python -c "import candl, clipy, cobaya, camb, mpi4py; print(candl.__version__, clipy.__version__, cobaya.__version__, camb.__version__, mpi4py.__version__)"
-python -m pytest -q            # from the repo root; 67 tests, all should pass
+python -m pytest -q            # from the repo root; 88 tests, all should pass
 python -m lensing_fisher.cli --help
 ```
 
@@ -181,11 +181,49 @@ sides.
 
 ### After each chain converges
 
-`Rminus1_stop: 0.02` is set in the configs. Then minimize and write the template:
+`Rminus1_stop: 0.02` is set in the configs. Then minimize and write the template.
+Submit the minimizer against the *same* config the chain ran — not a copy, so the
+two cannot drift:
 
 ```bash
-cobaya-run examples/chain_up_planck_act_spt.yaml --minimize
+./cluster/submit_job.sh -f examples/chain_up_planck_act_spt.yaml \
+                        -t cluster/job_template_minimize.sh
 ```
+
+Cobaya inserts a `minimize` infix, so this writes `<prefix>.minimum[.txt]`
+alongside the chain and overwrites nothing. **The rank count is the number of
+independent minimizations** — cobaya runs `ceil(best_of / n_ranks)` starts per
+rank, so at the default `best_of: 2` the 16 ranks in the template give 16 starts:
+the first four seeded from the MAP of each chain file, the remaining twelve from
+random `ref` draws. That mixture is the point. A single start would not detect
+the spurious optimum this likelihood has produced before.
+
+Check three things before trusting the result:
+
+- **all starts converged** — `grep -c 'Run 1/1 converged'` should equal the rank
+  count, and there should be no `Cannot reproduce log minimum` warning
+- **it beats the chain** — the minimum's `-logpost` must be below the best
+  sample the chain drew
+- **it is actually a minimum** — step each parameter by +/-0.1 sigma and confirm
+  `-logpost` rises both ways. The asymmetry of that pair also measures how far
+  off-centre the minimum still is: `d = h (f+ - f-) / (2 (f+ + f-))`.
+
+For UP-P on 2026-08-04 that gave 16/16 converged, an improvement of 0.183 over
+the best sample, every excursion positive, and a residual offset <= 0.04 sigma
+(`cosmomc_theta`; all others <= 0.013 sigma). `bobyqa`'s default `rhoend: 0.05`
+is a deliberately relaxed criterion for noisy likelihoods and lands right there —
+do not tighten it without checking that it is not just chasing CAMB noise.
+
+That precision is far more than this needs: a 0.05 sigma error in any single
+parameter moves `C_L^pp` by at most **0.25%** anywhere in 2 <= L <= 2000 (worst
+case `omch2`, at L=2000), against a 2.6% `sigma(A_template)` from the SPA Fisher.
+At the offsets actually achieved the template error is ~0.03%.
+
+One reporting trap: the `-log(Like)` and `chi-sq` in the header of `.minimum` are
+the *posterior* values. The likelihood chi2 is the separate `chi2__...` entry —
+939.81 against the header's 897.36 for UP-P, the 21.2-nat difference being the
+flat priors' normalization. The *location* is unaffected, since flat priors put
+the MAP and the maximum-likelihood point at the same place.
 
 Take the best fit and write `{L, CL_pp_fid}` in the CAMB convention
 **`[L(L+1)]^2 C_L^phiphi / 2pi`** — that is what `get_lens_potential_cls(...)[:, 0]`
@@ -220,12 +258,33 @@ bin to CAMB's lmax, log-spaced at iteration 0.
 **The user drives this loop. Run one pass, report, and wait.** Do not chain
 iterations unattended.
 
-### Benchmark before the first full pass
+### Cost: measured, 2026-08-04
 
-The Fisher template's walltime (`2-11:00`) and rank count (15) are carried over
-from a much smaller job — 27 bins at theory lmax 2500. This run is 51 bins at
-lmax 6500 with `lens_potential_accuracy: 8`. Time one CAMB call at those settings
-on a login node before committing two and a half days:
+The first full pass took **13 minutes** on 15 ranks, not the 2.5 days the
+template reserved, and the walltime is now `0-03:00`. After the load-balance fix
+below it should be nearer 5. Nothing was skipped — the estimate in this section
+used to be wrong, by about 14x.
+
+Cost is set by the number of **unique cosmologies**, not by the element count. A
+mixed derivative in one cosmological and one non-cosmological parameter reuses
+the same `+/-h` CAMB solves as every other element perturbing that parameter, so
+for `n_c` cosmological parameters the whole matrix needs
+
+    4*n_c  (single-parameter stencils)
+  + 4*n_c*(n_c-1)/2  (the corners of the cosmology-pair elements)
+  + 1  (the fiducial)
+
+= **85 solves at `n_c = 6`**, against roughly 16 s each at lmax 6500 /
+`lens_potential_accuracy: 8` / 4 threads. The old estimate here counted
+`1950 * 0.15 * 4` calls and ignored the sharing.
+
+Those 85 used to land almost entirely on rank 0: `FisherMatrix._tasks` restarted
+its round robin inside each bucket, and the 15 cosmology-pair buckets hold one
+element each, so `n=0` dealt every one of them to rank 0 while the other ranks
+idled at ~25 solves (42% CPU efficiency overall). The counter now carries across
+buckets and all 15 ranks take 25.
+
+To re-measure after a change, time one call at the production settings:
 
 ```bash
 source cluster/env.sh
@@ -242,13 +301,11 @@ t = time.time(); res = camb.get_results(pars); print(f"get_results {time.time()-
 PY
 ```
 
-Roughly: a 62-parameter Fisher has ~1950 unique matrix elements, each needing a
-few likelihood evaluations, but only ~15% perturb a cosmological parameter at all
-— the rest hit the CAMB cache. So expect wall-clock of order
-`1950 * 0.15 * 4 * t_camb / 15 ranks`. If that lands anywhere near the walltime,
-raise ranks or split the job before submitting. Report the number.
+Expect wall-clock of order `85 * t_camb / n_ranks` plus about 0.3 s per matrix
+element for the likelihood evaluations themselves (1891 elements at 61
+parameters, spread over the ranks). Report the number.
 
-### Then check whether the accuracy settings are good enough
+### Accuracy settings: measured, 2026-08-04 — no change needed
 
 `camb.accuracy` in the config is inherited from the pre-2026 run
 (`AccuracyBoost 1.0`, `lSampleBoost 1.0`, `lAccuracyBoost 1.2`). A Fisher matrix
@@ -257,8 +314,19 @@ finite differences, so noise `eps` in `C_ell` enters the answer as `~eps/h^2`,
 an amplification of order `1e4` at `h ~ 0.01`. Absolute accuracy largely cancels
 between the `+h` and `-h` evaluations; *smoothness in the parameters* does not.
 
-Rather than guess, measure the thing that matters — the stability of a second
-difference — at the current settings and at boosted ones:
+That reasoning is sound but the answer came back clean, and directly: every
+`clpp` diagonal of the real iteration-0 Fisher is stable to better than **0.1%
+across `h = 0.01 .. 5.0`**, a 500x range, and the off-diagonals to 0.1-2%. The
+finite differences sit on a wide plateau at the current settings. `step_size:
+0.05` is comfortably inside it for every bin, weak ones included.
+
+So do not raise the boosts, and do not read the singular matrix as a symptom of
+them — see "The matrix is rank-deficient, and that is fine" below. Verified at
+the same time: `set_for_lmax(lens_potential_accuracy=8)` does survive the later
+`set_matter_power` and `set_accuracy` calls (`max_eta_k` = 144000).
+
+The check below is kept for when the settings or the parameter set change. It
+measures the stability of a second difference at current and boosted settings:
 
 ```bash
 python - <<'PY'
@@ -326,7 +394,14 @@ lensing-fisher-rebin $MNU_HUNTER_ROOT/data/full_fishers/spa_iterN.pkl \
 
 Then **stop and report** to the user:
 
-- `L_eff` and its 68% band, alongside the previous pass's values
+- `L_eff` (mean), the **median**, and the 68% band, alongside the previous pass's
+  values. Prefer the median: see "L_eff is the fragile statistic" below. The CLI
+  prints a NOTE when mean and median differ by more than a quarter of the 68%
+  width, which is the signal that the weight is skewed enough for the mean to be
+  misleading.
+- **the moment window.** The moments now stop below the last bin, so the window
+  is that bin's lower edge — and that edge *moves between iterations*. Two passes
+  are only comparable at a common cap; compare at the smaller of the two.
 - how far the edges moved, and whether `edges_converged` returned true
 - **how many bins sit at the min-width floor** — this is the diagnostic that
   matters most. If most of them do, the grid has stopped being
@@ -334,40 +409,114 @@ Then **stop and report** to the user:
   data. At 50 bins over L=2..2000 a floor of 3 leaves the target attainable; a
   floor of 8 put 46/50 bins on the floor with 71% scatter in per-bin
   information. The CLI prints a NOTE when this happens — do not ignore it.
-- any negative eigenvalues, or a non-invertible marginalized `clpp` block
+
+  The floor is not cosmetic. With `steepness: 2` a bin basis function is a
+  difference of two sigmoids that each take about +/-1 in L to switch, so a bin
+  narrower than ~3 never reaches 1 and is mostly a smeared copy of its
+  neighbours. Iteration 0's log-spaced grid put 18 bins below L=24, several of
+  them containing *no integer multipole at all*: bin 2 spanned [2.296, 2.637)
+  and its largest effect, 0.16, was at L=2 — inside bin 1. `--min-width 3` is
+  what keeps the parametrization meaning what it says.
 
 Wait for the user before starting the next pass.
 
+### The matrix is rank-deficient, and that is fine
+
+Iteration 0 reported 23 non-positive eigenvalues and NaN per-bin sigmas. That is
+the expected output, not a fault, and it is *not* the small scales dropping out:
+bins 43-51 (L > 660) carry 0.2% of the non-positive subspace and are the best
+determined in the matrix. The bad directions are alternating-sign combinations of
+*adjacent* bins around L = 30-330.
+
+The lensed CMB responds to `C_L^pp` through a broad smoothing, so it resolves
+only a handful of combinations — the marginalized `clpp` block's eigenvalues fall
+below 1e-3 of maximum at mode 7 and below 1e-6 at mode 14, and only ~4 modes have
+sigma < 1. The other ~44 directions have a true eigenvalue of zero, which finite
+differences scatter to either side; 23 landed negative, the worst at 1.5e-12 of
+the largest eigenvalue.
+
+The distinction that matters:
+
+| question | needs | status |
+|---|---|---|
+| "how well is bin *j* measured on its own?" | `inv(F)` | undefined, permanently |
+| "where does the information on `A_template` live?" | `F @ r` | fine |
+
+`w_j = r_j (F r)_j` never touches the null space, so `L_eff`, its band and
+`sigma(A_template)` are unaffected — iteration 0 gave `L_eff` = 187.1, band
+[60.3, 240.9], `sigma(A_tem)` = 0.0263, with all 51 `w_j` non-negative. Since the
+second row is what this track is for, a fine grid is fine. Reducing the bin count
+would only be necessary if you wanted per-bin `C_L^pp` constraints, which would
+need n <~ 7 and a rank-aware analysis.
+
+`summary()` now reports the resolved-mode count and prints `--` rather than NaN.
+
 ### Setting up the next pass
 
-Paste the new edges into `bins.edges` and switch the step sizes to track the
-previous Fisher:
+Paste the new edges into `bins.edges` and bump the output filename. That is all:
 
 ```yaml
 bins:
   edges: [2, 5.1, 8.7, ...]        # from edges_N+1.yaml
-  step_size:
-    from_fisher: ${MNU_HUNTER_ROOT}/data/full_fishers/spa_iterN.pkl
-    target_sigma_frac: 0.3
-    min: 0.02
-    max: 0.5
+  step_size: 0.05                  # leave scalar — see below
 output:
   filename: spa_iterN+1.pkl
 ```
 
-A scalar `step_size` is fine only for iteration 0. On an equal-information grid
-the narrow bins hold less lensing power and are more weakly constrained, so a
-single fractional step gives them a poor finite-difference signal.
+**Do not switch to `step_size: {from_fisher: ...}`.** This runbook used to
+instruct that, on the reasoning that narrow bins are weakly constrained and need
+proportionally larger steps. Both halves turned out to be wrong:
+
+- It cannot work. Sizing a step off `sigma(q_j)` requires inverting the
+  marginalized `clpp` block, which is rank-deficient by construction. On the
+  iteration-0 grid 21 of 51 sigmas came back NaN, and the code logged
+  `nan..nan` and carried on — the NaNs would have reached the next Fisher
+  silently. `clpp_step_sizes` now raises instead.
+- It is unnecessary. The finite differences are on a 500x-wide plateau (see
+  "Accuracy settings" above), so a single scalar serves every bin.
 
 **Keep every iteration's pickle.** The sequence of `L_eff` values is itself the
 evidence of convergence and belongs in the notes.
+
+### L_eff is the fragile statistic
+
+`weight_density` spreads each bin's information uniformly across the bin. That is
+harmless for a bin a few multipoles wide and badly wrong for the last one, which
+runs to CAMB's `max_l` — its width is set by the theory lmax, not by the data,
+and the real information inside it falls steeply toward the low edge. A mean
+takes the full lever arm of that width.
+
+Measured on the SPA runs. Iteration 0's last bin was [2000, 8550] holding 0.02%
+of the information, so it barely mattered; iteration 1's was [999, 8550] holding
+2.1%, and including it moved `L_eff` from 164.2 to **261.2** — past its own 68%
+upper bound of 242.8. A mean outside its own central interval is the tell. The
+median moved 0.5 and the band moved 1.6 across the same change.
+
+So `summarize` excludes the last bin from the moments (`exclude_catchall=True`,
+the default). It still contributes to `w_bins` and `sigma_A_template`, which are
+unaffected — those are sums, with no lever arm.
 
 ### Stopping
 
 Stop when both hold:
 
-- edges shift by less than the min width, and
-- `L_eff` and its 68% bounds move by less than 2% of the band width.
+- edges shift by less than the min width, **among the edges that carry
+  information**, and
+- the median and the 68% bounds move by less than 2% of the band width, compared
+  **at a common moment cap**.
+
+Both qualifications are load-bearing, and iteration 1 is why. Its raw verdict was
+"max edge movement 375.93, not converged" — but 44 of 51 edges moved less than
+the min width, every edge below L=300 moved by <=16, and the 375.93 was the
+catch-all's lower edge going 999.3 -> 1375.0. That edge sits where ~2% of the
+information is, so the equal-information CDF is nearly flat there and the
+quantile is barely determined. It is not a data-determined number and waiting for
+it to settle is waiting on noise.
+
+Likewise the moments: compared at their own windows, iteration 0 -> 1 moved the
+mean by 22 and `L_plus` by 11. Compared at a common cap of 999 — the range both
+grids actually resolve with real bins — the shifts are mean +2.0, median +0.4,
+`L_minus` +0.2, `L_plus` +0.7, against a 2% tolerance of 3.4. Converged.
 
 Expect 2-4 passes. If it has not converged by 5, stop and report rather than
 continuing — non-convergence means something about the kernel or the step sizes
@@ -412,6 +561,41 @@ does not, that is a result worth writing down, not a bug.
   path discarded the assembled array. Fixed, and `FisherMatrix.save` now refuses
   an all-zero matrix. If you ever see that exception, the fix regressed; do not
   work around it.
+- **`set_cosmology` silently reverted the BBN predictor.** CAMB rederives `YHe`
+  from `bbn_predictor` on *every* `set_cosmology` call, and
+  `BinnedLensingTheory._camb_results` called it without the config's
+  `camb.set_cosmology` block. So the first cache miss dropped PArthENoPE for
+  CAMB 1.6.4's PRIMAT default and stayed there — `YHe` 0.24537943 -> 0.24583841,
+  0.19%, landing in the damping tail where ACT and SPT carry their weight. The
+  whole iteration-0 run was affected. It was self-consistent internally, so
+  nothing looked wrong; it just described a different model from the chains,
+  which is the one failure this package exists to prevent. Fixed by passing
+  `cosmology_kwargs` through, covered by
+  `tests/test_parametrization.py::test_bbn_predictor_survives_every_cache_miss`.
+  The same call also hardcoded `mnu`/`omk` defaults, so a parameter promoted to
+  the free vector would have been silently pinned; also fixed.
+- **A NaN likelihood became a *perfect* likelihood.** Cobaya evaluates the
+  posterior with `make_finite=True`, which is `np.nan_to_num` — and that maps NaN
+  to **0.0**, not to a bad value. A log-likelihood of zero beats every real point
+  in the space, so a minimizer runs straight at it and a chain that proposes one
+  can never leave. This sank the first UP-PAS minimization (2026-08-05): two of
+  sixteen starts reached the corner of the prior box and reported
+  `-logpost = -25.3613`, which is *exactly* minus the log-prior volume — the
+  signature of a likelihood contributing precisely zero. Cobaya's own "Cannot
+  reproduce log minimum" check caught it and failed the job, which is the only
+  reason it was not silently adopted. `CandlClipyCombined.logp` now returns
+  `-inf` if any component is non-finite; `make_finite` maps that to -1.8e308.
+  The culprit is **`planck_lowl_ee` (simall sroll2) at tau ~ 0.14**, with CAMB's
+  spectra entirely finite — so this is *not* the emulator tau-range problem noted
+  below, and using CAMB does not protect you from it.
+- **clipy's `commander` self-check fails**, `got -166.796 expected -11.6257`, in
+  every job that loads it. Investigated: at the fiducial cosmology commander
+  returns -166.839 and responds sensibly to `logA` (dlogL = -0.82, -2.33, +1.41
+  for dlogA = +0.02, +0.05, -0.05), so the shape and derivatives are sound and
+  this looks like a missing ~155-nat normalization constant. Harmless for the
+  Fisher (cancels in a second difference) and for MCMC (a constant offset), but
+  it invalidates any absolute chi2 or evidence. Confirm against cobaya's native
+  clik before quoting either.
 - **candl's `ell_max` ignores `data_selection`.** A likelihood cropped to
   ell<=1000 still advertises 8501. Trust `windows.effective_ell_max`, not
   `like.ell_max`.

@@ -173,3 +173,35 @@ def test_camb_cosmology_extras_reach_set_cosmology():
         cosmology,
     )
     assert default.YHe != parthenope.YHe
+
+
+@pytest.mark.parametrize("epsilon", [0.0, 1e-9], ids=["exact", "near"])
+def test_clpp_steps_refuse_a_rank_deficient_fisher(tmp_path, epsilon):
+    """Per-bin sigma does not exist when adjacent bins are degenerate.
+
+    The lensed CMB resolves only a handful of C_L^pp modes, so on a fine grid the
+    marginalized block is singular and sqrt(diag(inv(F))) is NaN. Feeding those
+    NaNs forward produced a Fisher matrix of quiet garbage, so this must raise.
+
+    Both spellings occur: an exactly flat direction makes numpy raise, while the
+    real thing is a zero that finite differences have blurred to the *negative*
+    side, which inverts happily and returns a negative variance. `epsilon` is
+    that blur — the run this guards against had 23 such eigenvalues.
+    """
+    import pickle
+
+    prev_edges = np.array([2.0, 100.0, 1000.0, 2000.0])
+    names = ["H0"] + [f"clpp_{i+1}" for i in range(3)]
+    # Bins 2 and 3 enter only through their sum: the (0, 1, -1) direction is flat.
+    F = np.zeros((4, 4))
+    F[0, 0] = 1.0
+    F[1, 1] = 100.0
+    F[2:, 2:] = np.array([[1.0, 1.0 + epsilon], [1.0 + epsilon, 1.0]])
+    path = tmp_path / "prev.pkl"
+    pickle.dump({"fisher_matrix": F, "param_names": names, "bin_edges": prev_edges},
+                open(path, "wb"))
+
+    with pytest.raises(ValueError, match="rank-deficient"):
+        driver.clpp_step_sizes(
+            {"from_fisher": str(path), "target_sigma_frac": 0.3}, prev_edges
+        )

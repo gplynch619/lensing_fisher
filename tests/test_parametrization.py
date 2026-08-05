@@ -211,3 +211,42 @@ def test_camb_cache_counts_distinct_cosmologies(camb_setup):
     # A genuine cosmology change must.
     f(dict(base, H0=68.0), 800, 2)
     assert f.cache_stats["misses"] == 2
+
+
+def test_bbn_predictor_survives_every_cache_miss(camb_setup):
+    """set_cosmology rederives YHe, so the BBN predictor must be re-supplied.
+
+    The regression: _camb_results called set_cosmology without the config's
+    camb.set_cosmology block, so the first cache miss silently dropped
+    PArthENoPE for CAMB's PRIMAT default and every evaluation after it — the
+    Fisher and the Cobaya chains would then describe different damping tails.
+    """
+    pars, fid, clpp_fid = camb_setup
+    edges = np.array([2.0, 50.0, 200.0, 600.0, float(pars.max_l)])
+    extras = {"mnu": 0.06, "omk": 0.0,
+              "bbn_predictor": "PArthENoPE_880.2_standard.dat",
+              "nnu": 3.044, "num_massive_neutrinos": 1}
+
+    f = BinnedLensingTheory(pars, edges, clpp_fid, steepness=2.0,
+                            cosmology_kwargs=extras)
+    base = dict(fid, **{f"clpp_{i+1}": 0.0 for i in range(len(edges) - 1)})
+
+    reference = camb.CAMBparams()
+    reference.set_cosmology(H0=fid["H0"], ombh2=fid["ombh2"], omch2=fid["omch2"],
+                            tau=fid["tau"], **extras)
+
+    for shift in (1.0, 1.02, 0.98):                 # three separate cache misses
+        f._camb_results(dict(base, omch2=base["omch2"] * shift))
+        assert f.camb_pars.YHe == pytest.approx(reference.YHe, rel=1e-12)
+
+
+def test_free_cosmology_parameter_overrides_its_fixed_value(camb_setup):
+    """A parameter promoted into the Fisher vector must not stay pinned."""
+    pars, fid, clpp_fid = camb_setup
+    edges = np.array([2.0, 50.0, 200.0, 600.0, float(pars.max_l)])
+    f = BinnedLensingTheory(pars, edges, clpp_fid, steepness=2.0,
+                            cosmology_kwargs={"mnu": 0.06, "omk": 0.0})
+
+    base = dict(fid, **{f"clpp_{i+1}": 0.0 for i in range(len(edges) - 1)})
+    f._camb_results(dict(base, mnu=0.12))
+    assert f.camb_pars.omnuh2 == pytest.approx(0.12 / 93.14, rel=2e-2)
