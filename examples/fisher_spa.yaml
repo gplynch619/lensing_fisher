@@ -79,37 +79,68 @@ camb:
   window_support_tol: 1.0e-3
 
 bins:
-  edges:
-    start: 2
-    stop: 2000
-    n: 50
-    spacing: log
-  # A catch-all bin from 2000 to CAMB's max_l is appended automatically so that
-  # a uniform q is exactly A_template. Set extend_to_lmax: false to disable.
+  # ITERATION 1. Equal-information grid from
+  #   lensing-fisher-rebin spa_iter0.pkl -n 50 --min-width 3 --l-max 2000
+  #
+  # 50 bins over L=2..2000. The catch-all [2000, CAMB max_l] is appended
+  # automatically (bins.extend_to_lmax) and is deliberately NOT listed here, so
+  # the run has 51 bins — the same structure as iteration 0.
+  #
+  # `--l-max 2000` is not optional. Without it, rebin spans the input grid's full
+  # range *including* the catch-all: ~98% of the weight sits below L~1000, so all
+  # 50 bins landed under 999 and the 50th became [999, 8550]. That collapsed the
+  # resolved range from 2000 to 999, spent a bin on the tail, and made the
+  # catch-all's lower edge a free parameter — the source of the 375.93 "edge
+  # movement" and of L_eff swinging 164 -> 261. Keep the top fixed at 2000 across
+  # iterations so edge movement means what it says.
+  #
+  # Iteration 0 was `{start: 2, stop: 2000, n: 50, spacing: log}`. Do not go back
+  # to that: log spacing from L=2 makes the first bins ~0.3 wide, narrower than
+  # the sigmoid edges of their own basis functions, so they never reach 1 and
+  # several contain no integer multipole at all. --min-width 3 prevents it; at
+  # width 3 a basis function peaks at 0.995.
+  edges: [2, 21.89, 30.14, 36.53, 42.08, 47.06, 51.62, 56.1, 60.28, 64.41,
+          68.37, 72.32, 76.11, 79.89, 83.66, 87.41, 91.15, 94.9, 98.68, 102.5,
+          106.3, 110.1, 114.1, 118.1, 122, 126, 130.4, 134.8, 139.2, 143.6,
+          148.6, 153.7, 158.8, 164, 169.7, 176.2, 182.6, 189, 197.4, 206.3,
+          215.2, 226.9, 241.1, 259.1, 286.9, 366, 449, 516.6, 666.4, 996.2,
+          2000]
   steepness: 2
 
   template:
-    # The existing unlensed best-fit template, from the pre-2026 UP chain. Good
-    # enough to iterate the binning against: choosing C_fid != C_tem is corrected
-    # exactly at analysis time by r_j = C_tem(L_j)/C_fid(L_j), so the converged
-    # bin grid does not depend on getting this right.
+    # The UP-P (A1) best fit — chain converged 2026-08-04 at R-1 = 0.018, then
+    # minimized from 16 starts (see cluster/RUNBOOK.md). Because C_fid is now the
+    # template of interest, r == 1 identically and this Fisher is exactly the
+    # A_template Fisher for that template. Do NOT pass --template to
+    # lensing-fisher-rebin on its output.
     #
-    # Once the new UP-PAS chain lands, repoint this at ITS best-fit template and
-    # rerun once at the converged edges. Then r == 1 identically and the Fisher
-    # is exactly the A_template Fisher. L_eff should move by much less than its
-    # 68% width; if it does not, that is a result worth recording.
-    file: ${MNU_HUNTER_ROOT}/src/unlensed_bestfit_pp.pkl
+    # Previously ${MNU_HUNTER_ROOT}/src/unlensed_bestfit_pp.pkl, the pre-2026
+    # template; against that one r ran 0.987..0.992, an almost pure ~1% amplitude
+    # offset, and correcting for it moved the bin edges by less than the 3-wide
+    # min width. So the grid above is unaffected by the swap, as expected.
+    #
+    # Generated at lens_potential_accuracy 8 rather than the 4 the chain sampled
+    # at: below L=500 the two agree to 0.02%, but by L=4000-8550 lpa=4 is off by
+    # 4.2%, and that range is the catch-all bin. lpa=8 is converged to 0.5%
+    # against lpa=12. It also runs to L=10950, covering CAMB's max_l of 8550 with
+    # no extrapolation.
+    file: ${MNU_HUNTER_ROOT}/data/up_p_bestfit_pp.pkl
 
-  # Fractional step in q. A scalar is fine for iteration 0; from iteration 1
-  # size it per bin off the previous Fisher, so narrow bins (which are more
-  # weakly constrained) get proportionally larger steps.
+  # Fractional step in q. Keep this scalar — do NOT switch to the per-bin
+  # `step_size: {from_fisher: ...}` form at iteration 1.
+  #
+  # That form exists to give weakly-constrained bins a larger step, sized off the
+  # previous iteration's sigma(q_j). But sigma(q_j) requires inverting the
+  # marginalized clpp block, which is rank-deficient by construction: on a 51-bin
+  # grid only ~7 modes are resolved, so 21 of the 51 sigmas came back NaN. The
+  # driver now raises rather than feeding those into a run.
+  #
+  # It is also solving a problem that does not exist here. Measured on the
+  # iteration-0 setup, every clpp diagonal is stable to better than 0.1% across
+  # h = 0.01 .. 5.0 — a 500x range. 0.05 is comfortably inside that plateau for
+  # every bin, weak ones included.
   step_size: 0.05
-  # step_size:
-  #   from_fisher: ${MNU_HUNTER_ROOT}/data/full_fishers/spa_iter0.pkl
-  #   target_sigma_frac: 0.3
-  #   min: 0.02
-  #   max: 0.5
 
 output:
   directory: ${MNU_HUNTER_ROOT}/data/full_fishers
-  filename: spa_iter0.pkl
+  filename: spa_iter1.pkl
